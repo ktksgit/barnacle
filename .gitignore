@@ -1,0 +1,29 @@
+# eclipse files
+/.cproject
+/.project
+/.settings
+/.pydevproject
+
+# Scons
+.sconsign.dblite
+
+# vscode
+/.vscode
+/.env
+
+*.dll
+*.obj
+*.a
+*.o
+*.lib
+*.pyc
+*.exp
+*.exe
+*.pdb
+*.ilk
+
+/bin
+/object/
+
+/libs/tcl2python/py3_impl.html
+/venv/
