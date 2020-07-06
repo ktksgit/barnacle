@@ -1,0 +1,73 @@
+#!/usr/bin/env python
+
+import glob
+from os.path import join
+import os
+
+Import('*')
+
+
+baselibs   = [] # ['kernel32', 'advapi32', 'user32']
+winlibs    = baselibs + [] # ['gdi32', 'comdlg32', 'winspool']
+
+guilibs    = winlibs
+conlibs    = baselibs
+guilibsdll = winlibs
+conlibsdll = baselibs
+
+def remove_and_get(list, elem):
+    try:
+        list.remove(elem)
+    except ValueError:
+        pass
+    return elem
+
+
+files = glob.glob(join(Dir(PLATFORMDIR).abspath, '*.c'))
+for i, file in enumerate(files):
+	files[i] = os.path.basename(file)
+
+# Removed 2005-07-21 because antique platform
+remove_and_get(files, 'tclLoadAout.c')
+
+# Other platforms we don't need
+remove_and_get(files, 'tclLoadDld.c')
+remove_and_get(files, 'tclLoadDyld.c')
+remove_and_get(files, 'tclLoadNext.c')
+remove_and_get(files, 'tclLoadNext.c')
+remove_and_get(files, 'tclLoadOSF.c')
+remove_and_get(files, 'tclLoadShl.c')
+remove_and_get(files, 'tclLoadAix.c')
+
+
+env_stub = env.Clone()
+env_stub.AppendUnique(CPPDEFINES = TCL_DEFINES,
+)
+
+
+env_stub.Program(source = remove_and_get(files, 'cat.c'),
+                 target = 'cat32',
+                 LIBS = conlibs,
+)
+
+
+env_stub.AppendUnique(CPPPATH = TCL_INCLUDES)
+
+
+testMain_obj = env_stub.Object(target='testMain',
+                source=remove_and_get(files, 'tclAppInit.c'),
+                CPPDEFINES=['TCL_TEST'] + TCL_DEFINES)
+
+tclTest_obj = env_stub.Object(target='tclUnixest',
+                source=remove_and_get(files, 'tclUnixest.c'))
+
+tclAppInit_obj = env_stub.Object(target='tclAppInit',
+                source=remove_and_get(files, 'tclAppInit.c'))
+
+
+
+TCLTESTOBJS = testMain_obj + tclTest_obj
+TCLSHOBJS = tclAppInit_obj
+TCLOBJS = env_stub.File(files)
+
+Return('TCLOBJS TCLTESTOBJS TCLSHOBJS')

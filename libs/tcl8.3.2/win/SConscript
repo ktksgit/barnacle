@@ -1,0 +1,73 @@
+#!/usr/bin/env python
+
+import glob
+from os.path import join
+import os
+
+Import('*')
+
+
+baselibs   = ['kernel32', 'advapi32', 'user32']
+winlibs    = baselibs + ['gdi32', 'comdlg32', 'winspool']
+
+guilibs    = winlibs
+conlibs    = baselibs
+guilibsdll = winlibs
+conlibsdll = baselibs
+
+def remove_and_get(list, elem):
+    try:
+        list.remove(elem)
+    except ValueError:
+        pass
+    return elem
+
+
+files = glob.glob(join(Dir(PLATFORMDIR).abspath, '*.c'))
+for i, file in enumerate(files):
+	files[i] = os.path.basename(file)
+
+
+env_stub = env.Clone()
+env_stub.AppendUnique(CPPDEFINES = TCL_DEFINES,
+)
+
+
+env_stub.Program(source = remove_and_get(files, 'cat.c'),
+                 target = 'cat32',
+                 LIBS = conlibs,
+)
+
+
+env_stub.AppendUnique(CPPPATH = TCL_INCLUDES)
+
+
+testMain_obj = env_stub.Object(target='testMain',
+                source=remove_and_get(files, 'tclAppInit.c'),
+                CPPDEFINES=['TCL_TEST'] + TCL_DEFINES)
+
+tclWinTest_obj = env_stub.Object(target='tclWinTest',
+                source=remove_and_get(files, 'tclWinTest.c'))
+
+tclAppInit_obj = env_stub.Object(target='tclAppInit',
+                source=remove_and_get(files, 'tclAppInit.c'))
+
+# The following objects should be built using the stub interfaces
+'''
+tclWinReg_obj = env_stub.Object(target='tclWinReg',
+                source=remove_and_get(files, 'tclWinReg.c'),
+                CPPDEFINES=['USE_TCL_STUBS'])
+
+
+tclWinDde_obj = env_stub.Object(target='tclWinDde',
+                source=remove_and_get(files, 'tclWinDde.c'),
+                CPPDEFINES=['USE_TCL_STUBS'])
+'''
+remove_and_get(files, 'tclWinReg.c')
+remove_and_get(files, 'tclWinDde.c')
+
+TCLTESTOBJS = testMain_obj + tclWinTest_obj
+TCLSHOBJS = tclAppInit_obj
+TCLOBJS = env_stub.File(files)
+
+Return('TCLOBJS TCLTESTOBJS TCLSHOBJS')

@@ -1,0 +1,9 @@
+Import('*')
+
+strftime_obj = env.Object(target='strftime',
+                source='strftime.c',
+                CPPDEFINES=['BUILD_tcl'] + TCL_DEFINES,
+				CPPPATH = TCL_INCLUDES,
+)
+
+Return('strftime_obj')

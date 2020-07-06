@@ -1,0 +1,64 @@
+#!/usr/bin/env python
+
+import glob
+import os
+from os.path import join
+
+Import('*')
+
+baselibs   = ['kernel32.lib', 'advapi32.lib', 'user32.lib']
+winlibs    = baselibs + ['gdi32.lib', 'comdlg32.lib', 'winspool.lib']
+
+guilibs    = winlibs
+conlibs    = baselibs
+guilibsdll = winlibs
+conlibsdll = baselibs
+
+
+env_stub = env.Clone()
+env_stub.AppendUnique(CPPDEFINES = TCL_DEFINES,
+                      CPPPATH = TCL_INCLUDES,
+                      #CCFLAGS = TCL_CFLAGS,
+)
+
+def remove_and_get(list, elem):
+    try:
+        list.remove(elem)
+    except ValueError:
+        pass
+    return elem
+
+
+files = glob.glob(join(Dir(GENERICDIR).abspath, 'tcl*.c'))
+for i, file in enumerate(files):
+	files[i] = os.path.basename(file)
+
+# we are using tclWinLoad.c
+remove_and_get(files, 'tclLoadNone.c')
+	
+
+
+tcl_test_files = []
+tcl_test_files.append(remove_and_get(files, 'tclTest.c'))
+tcl_test_files.append(remove_and_get(files, 'tclTestObj.c'))
+tcl_test_files.append(remove_and_get(files, 'tclTestProcBodyObj.c'))
+tcl_test_files.append(remove_and_get(files, 'tclThreadTest.c'))
+
+TCLTESTOBJS = env_stub.Object(source=tcl_test_files)
+
+# The following objects are part of the stub library and should not
+# be built as DLL objects but none of the symbols should be exported				
+				
+tclStubLib_obj = env_stub.Library(target=TCLSTUBLIBNAME,
+                source=remove_and_get(files, 'tclStubLib.c'),
+                CPPDEFINES=['STATIC_BUILD'] + TCL_DEFINES
+)
+
+# Dedependency rules
+
+regexpression_obj = env_stub.File(['regcomp.c', 'regexec.c', 'regerror.c', 'regfree.c', 'regfronts.c'])
+
+		
+TCLOBJS = env_stub.File(files)  + regexpression_obj
+
+Return('tclStubLib_obj TCLOBJS TCLTESTOBJS')

@@ -1,0 +1,41 @@
+
+env = Environment(TARGET_ARCH='x86')
+
+AddOption('--mingw',
+          dest='mingw',
+          action='store_true',
+          default=True,
+          help='mingw build (defaults to VCompiler)')
+
+AddOption('--nodebug',
+          dest='nodebug',
+          action='store_true',
+          default=False,
+          help='perform release build')
+    
+is_mingw = GetOption('mingw')
+nodebug = GetOption('nodebug')
+
+if is_mingw == True:
+    env = Environment(tools = ['mingw'])
+else:
+    print ('Visual Studio build')
+    env.AppendUnique(CXXFLAGS =['/EHsc'])
+
+
+if is_mingw == True:
+    env.AppendUnique(CXXFLAGS='-g')
+else:
+    #env.AppendUnique(CXXFLAGS =['/DEBUG', '/W3', '/MDd', '/Od'], LINKFLAGS=['/DEBUG'])
+    if nodebug == True:
+        env.AppendUnique(LINKFLAGS=['/RELEASE'])
+    else:
+        env.AppendUnique(CCFLAGS =['/DEBUG'],
+                        LINKFLAGS=['/DEBUG'])
+        env['CCPDBFLAGS'] = '/Zi /Fd${TARGET}.pdb'
+        env['PDB'] = '${TARGET.base}.pdb'
+
+
+TCLOBJS = env.SConscript('SConscript_main.py',
+               exports='env nodebug is_mingw'
+)
