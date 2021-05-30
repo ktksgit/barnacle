@@ -60,7 +60,7 @@ CAT32       = 'cat32'
 
 LIB_INSTALL_DIR = join(INSTALLDIR, 'lib')
 BIN_INSTALL_DIR = join(INSTALLDIR, 'bin')
-SCRIPT_INSTALL_DIR  = join(INSTALLDIR, 'lib\tcl') + DOTVERSION
+SCRIPT_INSTALL_DIR  = join(INSTALLDIR, 'lib', 'tcl') + DOTVERSION
 INCLUDE_INSTALL_DIR = join(INSTALLDIR, 'include')
 
 
@@ -69,6 +69,8 @@ TCL_DEFINES = DEBUGDEFINES + THREADDEFINES
 
 if is_mingw:
     TCL_DEFINES +=  ['HAVE_NO_SEH']
+if not is_mingw and windows:
+    TCL_DEFINES +=  ['HAVE_TM_ZONE']
 if not windows:
     TCL_DEFINES +=  ['HAVE_UNISTD_H', 'NO_UNION_WAIT',
         'TIME_WITH_SYS_TIME',
@@ -149,15 +151,7 @@ TCLSHOBJS)=env.SConscript(f'{platform}/SConscript',
 TCLOBJS = tcl_objs_gen + tcl_objs + strftime_obj + tclStubLib_obj
 TCLTESTOBJS = tcl_test_objs_gen + tcl_test_objs
 
-if not is_mingw:
-    env.SConscript('SConscript_staticlib.py',
-               exports='env '
-                        'TCLREGDLLNAME TCLDDEDLLNAME TCLPIPEDLLNAME TCLDLLNAME TCLLIB '
-                        'TCLTEST TCLOBJS TCLTESTOBJS tclStubLib_obj '
-                        'TCL_INCLUDES TCL_DEFINES '
-						'LIB_INSTALL_DIR BIN_INSTALL_DIR ',
-               variant_dir=join(TMPDIR, 'static'),
-               duplicate=0
-    )
+tcl_dll_full_path = join(BIN_INSTALL_DIR, TCLDLLNAME + '.dll')
+env.Install(Dir('#/bin'), tcl_dll_full_path)
 
 Return('TCL_INCLUDES TCLDLLNAME BIN_INSTALL_DIR tclStubLib_obj')

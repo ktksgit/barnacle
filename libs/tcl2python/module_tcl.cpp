@@ -184,8 +184,9 @@ void createTclToPythonFunction(std::string name, py::function function)
         }
     }
 
-    auto func = [function, types = std::move(types)](Tcl::object const &argv) -> py::object  {
-		Tcl::interpreter interp{argv.get_interp(), false};
+    auto func = [function, types = std::move(types)](Tcl::object const &argv) -> py::object {
+        py::gil_scoped_acquire gil{};
+        Tcl::interpreter interp{argv.get_interp(), false};
 
         TclPythonGlobals::AutoStack handle_interpreter{interp.get()};
         size_t argc = argv.size(interp);
@@ -198,7 +199,8 @@ void createTclToPythonFunction(std::string name, py::function function)
             tcl_obj.set_interp(interp.get());
 
             Type type;
-            if (types.size() <= indx) {
+            if (types.size() <= indx)
+            {
                 if (types[types.size() - 1] == Type::VAR_POSITIONAL)
                 {
                     type = Type::VAR_POSITIONAL;
@@ -225,11 +227,13 @@ void createTclToPythonFunction(std::string name, py::function function)
         py::object result = function(*arguments);
 
         return result;
-	};
+    };
 
-	auto interp = TclPythonGlobals::getInstance().top();
-    Tcl::interpreter i {interp};
-    i.def2<>(name, func, Tcl::variadic());
+    auto interp = TclPythonGlobals::getInstance().top();
+    Tcl::interpreter i{interp};
+    i.def<>(name, func, Tcl::variadic());
+
+    // TODO: return raw address
 }
 
 

@@ -11,11 +11,7 @@ struct Tcl_Interp;
 class TclPythonGlobals {
 public:
     ~TclPythonGlobals();
-    static TclPythonGlobals& getInstance()
-    {
-        static TclPythonGlobals instance;
-        return instance;
-    }
+    static TclPythonGlobals& getInstance();
 
     class AutoStack {
         public:

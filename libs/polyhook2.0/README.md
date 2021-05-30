@@ -5,6 +5,8 @@ Article 1: https://www.codeproject.com/articles/1100579/polyhook-the-cplusplus-x
 
 Article 2: https://www.codeproject.com/Articles/1252212/PolyHook-2-Cplusplus17-x86-x64-Hooking-Library
 
+# Please consider sponsoring my work by clicking sponsor up in the top right
+
 # Community
 Ask for help, chat with others, talk to me here
 * [Official Gitter Chat](https://gitter.im/PolyHook/Lobby)
@@ -34,19 +36,17 @@ See: https://github.com/stevemk14ebr/PolyHook_2_0/pull/59#issuecomment-619223616
 I provide directions below for how to setup the visual studio cmake environment only. If you don't want to use visual studio that's fine, this is a standard cmake project and will build from command line just fine. 
 
 ### Visual Studio 2017/2019
-clone and init with given commands
+clone the project and perform submodule init as above. Do not run the cmake commands, instead:
 
-Open VS 2017, go to file->open->cmake.. this will load the project and start cmake generation. Next (optional step) go to tools->options->cmake->general->CMakeSettings.json path needs to be set to the polyhook2_0 directory that directly contains CMakeSettings.json, this will tell visual studio the build paths and also setup the build types (if it doesn't look right clear all the cmake cache stuff by cmake->clean all & cmake->cache->delete all & cmake->cache->generate. After all the stuff is done finally goto cmake->build all or cmake->build only or if you are in exe mode you can also set a startup item and release mode and use the play button. Capstone and asmjit are both set to automatically build and link, you DO NOT need to build them seperately.
-
-![CMakeSettings.json](https://i.imgur.com/RpHQ5Km.png)
+Open VS 2017, go to file->open->cmake.. this will load the project and start cmake generation. Next goto cmake->build all or cmake->build, you can also set a startup item and release mode to use the play button (do not use the install target). Capstone, Zydis, and asmjit are set to automatically build and link, you DO NOT need to build them seperately.
 
 ### Documentation
+https://stevemk14ebr.github.io/PolyHook_2_0/ & Read the Tests!
+
 I've setup an example project to show how to use this as a static library. You should clear your cmake cache between changing these options. The dll is built with the cmake option to export all symbols. This is different from the typical windows DLL where things are manually exported via declspec(dllexport), instead it behaves how linux dlls do with all symbols exported by default. This style should make it easier to maintain the code, the downside is there are many exports but i don't care.
 
-Read the tests for docs for now until i write some. They are extensive
-
 # Features
-0) Both capstone and zydis are supported as disassembly backends and are fully abstracted
+0) Both capstone and zydis are supported as disassembly backends and are fully abstracted.
 1) Inline hook (x86/x64 Detour)
     - Places a jmp to a callback at the prologue, and then allocates a trampoline to continue execution of the original function
     - Operates entirely on an intermediate instruction object, disassembler engine is swappable, capstone included by default
@@ -57,8 +57,10 @@ Read the tests for docs for now until i write some. They are extensive
       - Branches into overwritten section are resolved to the new moved location
       - Jmps from moved prologue back to original section are resolved through a jmp table
       - Relocations inside the moved section are resolved (not using relocation table, disassembles using engine)
-    - x64 trampoline is not restricted to +- 2GB, can be anywhere, avoids shadow space + no registers spoiled
+    - x64 trampoline is not restricted to +- 2GB, can be anywhere, avoids shadow space + no registers spoiled.
     - If inline hook fails at an intermediate step the original function will not be malformed. All writes are batched until after we know later steps succeed.
+    - Cross-Architecture hooking is _fully_ supported. Including the overriding of memory acccess routines to allow read/write of 64bit memory from 32bit process. You can hook 64bit from 32bit process if you're clever enough to write the shellcode required for the callbacks.
+    - Effecient reHook-ing logic is implemented. This can be used to combat third parties overwriting prologues back to original bytes. This is optimized into a few simple memcpy's rather than re-executing the entire logic in hook().
     
  2) Runtime Inline Hook
     - All the goodness of normal inline hooks, but JIT's a translation stub compatible with the given typedef and ABI. The translation stub will move arguments into a small struct, which is passed as pointer to a callback and allow the spoofing of return value. This allows tools to generate hook translation stubs at runtime, allowing for the full inline hooking of functions where the typedef is not known until runtime.

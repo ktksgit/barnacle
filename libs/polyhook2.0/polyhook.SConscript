@@ -6,16 +6,19 @@ sources = Glob('polyhook2/**/*.cpp', source=True)
 sources = [
     "sources/ADetour.cpp",
     "sources/CapstoneDisassembler.cpp",
+    "sources/ErrorLog.cpp",
     "sources/ILCallback.cpp",
+    "sources/MemAccessor.cpp",
     "sources/MemProtector.cpp",
     "sources/PageAllocator.cpp",
     "sources/PyCallback.cpp",
+    "sources/UID.cpp",
     "sources/x86Detour.cpp",
 ]
 
 polyhook_includes = File('CMakeLists.txt').srcnode().get_abspath()
 polyhook_includes = os.path.split(polyhook_includes)[0]
-env['polyhook_includes'] = polyhook_includes
+env['polyhook_includes'] = [ polyhook_includes ]
 
 polyhook = env.StaticLibrary(target = 'polyhook',
     source = sources,

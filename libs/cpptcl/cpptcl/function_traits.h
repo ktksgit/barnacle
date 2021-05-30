@@ -1,76 +1,83 @@
-/*
- * function_traits.h
- */
-
-#ifndef CPPTCL_FUNCTION_TRAITS_H_
-#define CPPTCL_FUNCTION_TRAITS_H_
+#ifndef CPPTCL_FUNCTION_TRAITS_H
+#define CPPTCL_FUNCTION_TRAITS_H
 
 #include <tuple>
 
 template<class F>
-struct function_traits;
+struct FunctionTraits;
 
 // function pointer
 template<class R, class... Args>
-struct function_traits<R(*)(Args...)> : public function_traits<R(Args...)>
+struct FunctionTraits<R(*)(Args...)> : public FunctionTraits<R(Args...)>
 {};
 
 template<class R, class... Args>
-struct function_traits<R(Args...)>
+struct FunctionTraits<R(Args...)>
 {
     using return_type = R;
 
     static constexpr std::size_t arity = sizeof...(Args);
+    using ArgsTypeList = std::tuple<Args...>;
 
     template <std::size_t N>
     struct argument
     {
         static_assert(N < arity, "error: invalid parameter index.");
-        using type = typename std::tuple_element<N,std::tuple<Args...>>::type;
+        using type = typename std::tuple_element<N, ArgsTypeList>::type;
     };
 };
 
 /// member function pointer
 template<class C, class R, class... Args>
-struct function_traits<R(C::*)(Args...)> : public function_traits<R(C&,Args...)>
+struct FunctionTraits<R(C::*)(Args...)> : public FunctionTraits<R(C&, Args...)>
 {};
 
 /// const member function pointer
 template<class C, class R, class... Args>
-struct function_traits<R(C::*)(Args...) const> : public function_traits<R(C&,Args...)>
+struct FunctionTraits<R(C::*)(Args...) const> : public FunctionTraits<R(C&, Args...)>
 {};
 
 /// member object pointer
 template<class C, class R>
-struct function_traits<R(C::*)> : public function_traits<R(C&)>
+struct FunctionTraits<R(C::*)> : public FunctionTraits<R(C&)>
 {};
 
+namespace {
+    template<std::size_t N, typename... T, std::size_t... I>
+    std::tuple<std::tuple_element_t<N + I, std::tuple<T...>>...>
+        sub(std::index_sequence<I...>);
 
-template<class F>
-struct traits
+    template<std::size_t StartIdx, typename... T>
+    using TupleSubpack = decltype(sub<StartIdx, T...>(std::make_index_sequence<sizeof...(T) - StartIdx>{}));
+}
+
+template<typename Functor>
+struct FunctionTraits
 {
-    private:
-        using call_type = function_traits<decltype(&F::operator())>;
-    public:
-        using return_type = typename call_type::return_type;
+private:
+    using call_type = FunctionTraits<decltype(&Functor::operator())>;
 
-        static constexpr std::size_t arity = call_type::arity - 1;
+public:
+    using return_type = typename call_type::return_type;
 
-        template <std::size_t N>
-        struct argument
-        {
-            static_assert(N < arity, "error: invalid parameter index.");
-            using type = typename call_type::template argument<N+1>::type;
-        };
+    static constexpr std::size_t arity = call_type::arity - 1;
+    using ArgsTypeList = TupleSubpack<1, typename call_type::ArgsTypeList>;
+
+    template <std::size_t N>
+    struct argument
+    {
+        static_assert(N < arity, "error: invalid parameter index.");
+        using type = typename call_type::template argument<N + 1>::type;
+    };
 };
 
 template<class F>
-struct traits<F&> : public traits<F>
+struct FunctionTraits<F&> : public FunctionTraits<F>
 {};
 
 template<class F>
-struct traits<F&&> : public traits<F>
+struct FunctionTraits<F&&> : public FunctionTraits<F>
 {};
 
 
-#endif /* CPPTCL_FUNCTION_TRAITS_H_ */
+#endif // CPPTCL_FUNCTION_TRAITS_H

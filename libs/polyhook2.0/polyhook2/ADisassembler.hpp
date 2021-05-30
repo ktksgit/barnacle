@@ -8,6 +8,7 @@
 #include "polyhook2/ErrorLog.hpp"
 #include "polyhook2/Instruction.hpp"
 #include "polyhook2/Enums.hpp"
+#include "polyhook2/MemAccessor.hpp"
 
 #include <vector>
 #include <unordered_map>
@@ -31,11 +32,11 @@ public:
 	 * @param Start: The address of the code buffer
 	 * @param End: The address of the end of the code buffer
 	 * **/
-	virtual insts_t disassemble(uint64_t firstInstruction, uint64_t start, uint64_t end) = 0;
+	virtual insts_t disassemble(uint64_t firstInstruction, uint64_t start, uint64_t end, const MemAccessor& accessor) = 0;
 
-	static void writeEncoding(const PLH::insts_t& instructions) {
+	static void writeEncoding(const PLH::insts_t& instructions, const MemAccessor& accessor) {
 		for (const auto& inst : instructions)
-			writeEncoding(inst);
+			writeEncoding(inst, accessor);
 	}
 
 	/**Write the raw bytes of the given instruction into the memory specified by the
@@ -45,8 +46,9 @@ public:
 	* first modify the byte array, and then call write encoding, proper order to relocate
 	* an instruction should be disasm instructions -> set relative/absolute displacement() ->
 	**/
-	static void writeEncoding(const Instruction& instruction) {
-		memcpy((void*)instruction.getAddress(), &instruction.getBytes()[0], instruction.size());
+	static void writeEncoding(const Instruction& instruction, const MemAccessor& accessor) {
+		assert(instruction.size() <= instruction.getBytes().size());
+		accessor.mem_copy(instruction.getAddress(), (uint64_t)&instruction.getBytes()[0], instruction.size());
 	}
 
 	static bool isConditionalJump(const PLH::Instruction& instruction) {
@@ -84,7 +86,16 @@ public:
 		* 0xFDFDFDFD : Used by Microsoft's C++ debugging heap to mark "no man's land" guard bytes before and after allocated heap memory
 		* 0xFEEEFEEE : Used by Microsoft's HeapFree() to mark freed heap memory
 		*/
-		return instruction.getMnemonic() == "ret";
+		std::string mnemonic = instruction.getMnemonic();
+		auto byts = instruction.getBytes();
+		return (instruction.size() == 1 && byts[0] == 0xCC) || 
+			(instruction.size() >= 2 && byts[0] == 0xf3 && byts[1] == 0xc3) ||
+			mnemonic == "ret" || mnemonic == "jmp" || mnemonic.find("iret") == 0;
+	}
+
+	static bool isPadBytes(const PLH::Instruction& instruction) {
+		// supports multi-byte nops
+		return instruction.getMnemonic() == "nop";
 	}
 
 	branch_map_t getBranchMap() {
@@ -95,7 +106,7 @@ public:
 	{
 		if (inst.isBranching()) {
 			// search back, check if new instruction points to older ones (one to one)
-			auto destInst = std::find_if(insVec.begin(), insVec.end(), [=] (const Instruction& oldIns) {
+			auto destInst = std::find_if(insVec.begin(), insVec.end(), [&] (const Instruction& oldIns) {
 				return oldIns.getAddress() == inst.getDestination();
 			});
 

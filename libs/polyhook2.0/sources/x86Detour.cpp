@@ -21,28 +21,28 @@ uint8_t PLH::x86Detour::getJmpSize() const {
 
 bool PLH::x86Detour::hook() {
 	// ------- Must resolve callback first, so that m_disasm branchmap is filled for prologue stuff
-	insts_t callbackInsts = m_disasm.disassemble(m_fnCallback, m_fnCallback, m_fnCallback + 100);
+	insts_t callbackInsts = m_disasm.disassemble(m_fnCallback, m_fnCallback, m_fnCallback + 100, *this);
 	if (callbackInsts.empty()) {
-		ErrorLog::singleton().push("Disassembler unable to decode any valid callback instructions", ErrorLevel::SEV);
+		Log::log("Disassembler unable to decode any valid callback instructions", ErrorLevel::SEV);
 		return false;
 	}
 
 	if (!followJmp(callbackInsts)) {
-		ErrorLog::singleton().push("Callback jmp resolution failed", ErrorLevel::SEV);
+		Log::log("Callback jmp resolution failed", ErrorLevel::SEV);
 		return false;
 	}
 
 	// update given fn callback address to resolved one
 	m_fnCallback = callbackInsts.front().getAddress();
 
-	insts_t insts = m_disasm.disassemble(m_fnAddress, m_fnAddress, m_fnAddress + 100);
+	insts_t insts = m_disasm.disassemble(m_fnAddress, m_fnAddress, m_fnAddress + 100, *this);
 	if (insts.size() <= 0) {
-		ErrorLog::singleton().push("Disassembler unable to decode any valid instructions", ErrorLevel::SEV);
+		Log::log("Disassembler unable to decode any valid instructions", ErrorLevel::SEV);
 		return false;
 	}
 
 	if (!followJmp(insts)) {
-		ErrorLog::singleton().push("Prologue jmp resolution failed", ErrorLevel::SEV);
+		Log::log("Prologue jmp resolution failed", ErrorLevel::SEV);
 		return false;
 	}
 
@@ -51,7 +51,7 @@ bool PLH::x86Detour::hook() {
 
 	// --------------- END RECURSIVE JMP RESOLUTION ---------------------
 
-	ErrorLog::singleton().push("Original function:\n" + instsToStr(insts) + "\n", ErrorLevel::INFO);
+	Log::log("Original function:\n" + instsToStr(insts) + "\n", ErrorLevel::INFO);
 
 	uint64_t minProlSz = getJmpSize(); // min size of patches that may split instructions
 	uint64_t roundProlSz = minProlSz; // nearest size to min that doesn't split any instructions
@@ -61,7 +61,7 @@ bool PLH::x86Detour::hook() {
 		// find the prologue section we will overwrite with jmp + zero or more nops
 		auto prologueOpt = calcNearestSz(insts, minProlSz, roundProlSz);
 		if (!prologueOpt) {
-			ErrorLog::singleton().push("Function too small to hook safely!", ErrorLevel::SEV);
+			Log::log("Function too small to hook safely!", ErrorLevel::SEV);
 			return false;
 		}
 
@@ -69,33 +69,36 @@ bool PLH::x86Detour::hook() {
 		prologue = *prologueOpt;
 
 		if (!expandProlSelfJmps(prologue, insts, minProlSz, roundProlSz)) {
-			ErrorLog::singleton().push("Function needs a prologue jmp table but it's too small to insert one", ErrorLevel::SEV);
+			Log::log("Function needs a prologue jmp table but it's too small to insert one", ErrorLevel::SEV);
 			return false;
 		}
 	}
 
 	m_originalInsts = prologue;
-	ErrorLog::singleton().push("Prologue to overwrite:\n" + instsToStr(prologue) + "\n", ErrorLevel::INFO);
+	Log::log("Prologue to overwrite:\n" + instsToStr(prologue) + "\n", ErrorLevel::INFO);
 
 	{   // copy all the prologue stuff to trampoline
 		insts_t jmpTblOpt;
 		if (!makeTrampoline(prologue, jmpTblOpt))
 			return false;
 
-		ErrorLog::singleton().push("Trampoline:\n" + instsToStr(m_disasm.disassemble(m_trampoline, m_trampoline, m_trampoline + m_trampolineSz)) + "\n", ErrorLevel::INFO);
+		Log::log("Trampoline:\n" + instsToStr(m_disasm.disassemble(m_trampoline, m_trampoline, m_trampoline + m_trampolineSz, *this)) + "\n", ErrorLevel::INFO);
 		if (!jmpTblOpt.empty())
-			ErrorLog::singleton().push("Trampoline Jmp Tbl:\n" + instsToStr(jmpTblOpt) + "\n", ErrorLevel::INFO);
+			Log::log("Trampoline Jmp Tbl:\n" + instsToStr(jmpTblOpt) + "\n", ErrorLevel::INFO);
 	}
 
 	*m_userTrampVar = m_trampoline;
+	m_hookSize = (uint32_t)roundProlSz;
+	m_nopProlOffset = (uint16_t)minProlSz;
 
-	MemoryProtector prot(m_fnAddress, roundProlSz, ProtFlag::R | ProtFlag::W | ProtFlag::X);
-	const auto prolJmp = makex86Jmp(m_fnAddress, m_fnCallback);
-	m_disasm.writeEncoding(prolJmp);
+	MemoryProtector prot(m_fnAddress, m_hookSize, ProtFlag::R | ProtFlag::W | ProtFlag::X, *this);
+	m_hookInsts = makex86Jmp(m_fnAddress, m_fnCallback);
+	m_disasm.writeEncoding(m_hookInsts, *this);
 
 	// Nop the space between jmp and end of prologue
-	const uint8_t nopSz = (uint8_t)(roundProlSz - minProlSz);
-	std::memset((char*)(m_fnAddress + minProlSz), 0x90, (size_t)nopSz);
+	assert(m_hookSize >= m_nopProlOffset);
+	m_nopSize = (uint16_t)(m_hookSize - m_nopProlOffset);
+	writeNop(m_fnAddress + m_nopProlOffset, m_nopSize);
 
 	m_hooked = true;
 	return true;
@@ -120,7 +123,7 @@ bool PLH::x86Detour::makeTrampoline(insts_t& prologue, insts_t& trampolineOut) {
 	uint8_t retries = 0;
 	do {
 		if (retries++ > 4) {
-			ErrorLog::singleton().push("Failed to calculate trampoline information", ErrorLevel::SEV);
+			Log::log("Failed to calculate trampoline information", ErrorLevel::SEV);
 			return false;
 		}
 
@@ -140,13 +143,13 @@ bool PLH::x86Detour::makeTrampoline(insts_t& prologue, insts_t& trampolineOut) {
 	} while (instsNeedingEntry.size() > neededEntryCount);
 
 	const int64_t delta = m_trampoline - prolStart;
-	MemoryProtector prot(m_trampoline, m_trampolineSz, ProtFlag::R | ProtFlag::W | ProtFlag::X, false);
+	MemoryProtector prot(m_trampoline, m_trampolineSz, ProtFlag::R | ProtFlag::W | ProtFlag::X, *this, false);
 
 	// Insert jmp from trampoline -> prologue after overwritten section
 	const uint64_t jmpToProlAddr = m_trampoline + prolSz;
 	{
 		const auto jmpToProl = makex86Jmp(jmpToProlAddr, prologue.front().getAddress() + prolSz);
-		m_disasm.writeEncoding(jmpToProl);
+		m_disasm.writeEncoding(jmpToProl, *this);
 	}
 
 	const uint64_t jmpTblStart = jmpToProlAddr + getJmpSize();

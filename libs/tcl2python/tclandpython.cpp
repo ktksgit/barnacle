@@ -3,7 +3,7 @@
 
 #include "py3.h"
 
-#include <Python.h>
+// #include <Python.h>
 #include "cpptcl.h"
 
 #include <iostream>
@@ -15,83 +15,117 @@ using namespace py::literals;
 
 namespace py = pybind11;
 
-class PythonInterpreterSingleton {
-	PythonInterpreterSingleton() {
-		py::initialize_interpreter();
-	}
+class PythonInterpreterSingleton
+{
+    PythonInterpreterSingleton()
+    {
+        py::initialize_interpreter();
+        _gil_release = std::make_unique<py::gil_scoped_release>();
+    }
+
 public:
-	~PythonInterpreterSingleton() {
-		py::finalize_interpreter();
-	}
+    ~PythonInterpreterSingleton()
+    {
+        _gil_release.reset();
+        py::finalize_interpreter();
+    }
 
-	PythonInterpreterSingleton(PythonInterpreterSingleton const&) = delete;
-	void operator=(PythonInterpreterSingleton const&) = delete;
+    PythonInterpreterSingleton(PythonInterpreterSingleton const &) = delete;
+    void operator=(PythonInterpreterSingleton const &) = delete;
 
-	static PythonInterpreterSingleton& getInstance() {
-		static PythonInterpreterSingleton instance;
-		return instance;
-	}
+    static PythonInterpreterSingleton &getInstance()
+    {
+        static PythonInterpreterSingleton instance;
+        return instance;
+    }
+
 private:
+
+    std::unique_ptr<py::gil_scoped_release> _gil_release;
 };
 
-struct PythonInterpreter {
+struct PythonInterpreter
+{
 public:
-	PythonInterpreter() {
-		PythonInterpreterSingleton::getInstance();
+    PythonInterpreter()
+    {
+        PythonInterpreterSingleton::getInstance();
 
-		// Inject something 
-		py::module::import("sys").attr("argv") = py::make_tuple("insert anything stupid", "");
-		/// importi("tcl", Tcl::interpreter::getDefault()->get());
-	}
+        py::gil_scoped_acquire gil{};
+        // Inject something
+        py::module::import("sys").attr("argv") = py::make_tuple("insert anything stupid", "");
+        /// importi("tcl", Tcl::interpreter::getDefault()->get());
+    }
 
-	~PythonInterpreter() = default;
+    ~PythonInterpreter() = default;
 
-	void exec(const char *str, const Tcl::object &dummy) {
-		auto interp = dummy.get_interp();
-		TclPythonGlobals::AutoStack handle_interpreter{interp};
+    void exec(const char *str, const Tcl::object &dummy)
+    {
+        auto interp = dummy.get_interp();
+        TclPythonGlobals::AutoStack handle_interpreter{interp};
 
-		auto globals = TclPythonGlobals::getInstance().getGlobals();
-		py::exec(str, globals);
-	}
+        py::gil_scoped_acquire gil{};
+        py::object globals = TclPythonGlobals::getInstance().getGlobals();
 
-	PyObject* eval(const char *str, const Tcl::object &dummy) {
-		auto interp = dummy.get_interp();
-		TclPythonGlobals::AutoStack handle_interpreter{interp};
+        py::exec(str, globals);
+    }
 
-		auto globals = TclPythonGlobals::getInstance().getGlobals();
+    PyObject *eval(const char *str, const Tcl::object &dummy)
+    {
+        auto interp = dummy.get_interp();
+        TclPythonGlobals::AutoStack handle_interpreter{interp};
 
-		py::object obj = py::eval(str, globals);
-		return obj.release().ptr();
-	}
+        py::gil_scoped_acquire gil{};
+        py::object globals = TclPythonGlobals::getInstance().getGlobals();
 
-	std::string  str(py::object str, const Tcl::object &dummy) {
-		auto interp = dummy.get_interp();
-		TclPythonGlobals::AutoStack handle_interpreter{interp};
+        py::object obj = py::eval(str, globals);
+        return obj.release().ptr();
+    }
 
-		return py::str(str);
-	}
+    std::string str(py::object str, const Tcl::object &dummy)
+    {
+        auto interp = dummy.get_interp();
+        TclPythonGlobals::AutoStack handle_interpreter{interp};
 
-	void import(const char*str, const Tcl::object &dummy) {
-		auto interp = dummy.get_interp();
+        py::gil_scoped_acquire gil{};
+        return py::str(str);
+    }
 
-		importi(str, interp);
-	}
+    void import(const char *str, const Tcl::object &dummy)
+    {
+        auto interp = dummy.get_interp();
+
+        importi(str, interp);
+    }
+
 private:
-	void importi(const char*str, Tcl_Interp* interp) {
-		TclPythonGlobals::AutoStack handle_interpreter{interp};
-		auto globals = TclPythonGlobals::getInstance().getGlobals();
+    void importi(const char *str, Tcl_Interp *interp)
+    {
+        TclPythonGlobals::AutoStack handle_interpreter{interp};
 
-		py::module imported = py::module::import(str);
-		globals[str] = imported;
-	}
+        py::gil_scoped_acquire gil{};
+        py::object globals = TclPythonGlobals::getInstance().getGlobals();
+
+        std::string full_module_name{str};
+        auto point = full_module_name.find('.');
+        std::string module_name = full_module_name.substr(0, point);
+
+        if (point != -1) {
+            py::module::import(str);
+        }
+
+        py::module imported = py::module::import(module_name.c_str());
+        globals[module_name.c_str()] = imported;
+    }
 };
 
-CPPTCL_MODULE(Tclandpython, interp) {
-	Tcl_RegisterObjType(getTclPyObjectInstance());
+CPPTCL_MODULE(Tclandpython, interp)
+{
+    Tcl_RegisterObjType(getTclPyObjectInstance());
 
     interp.class_<PythonInterpreter>("PythonInterpreter")
-         .def("exec", &PythonInterpreter::exec, Tcl::variadic())
-         .def("eval", &PythonInterpreter::eval, Tcl::variadic())
-         .def("str", &PythonInterpreter::str, Tcl::variadic())
-         .def("import", &PythonInterpreter::import, Tcl::variadic());
+        .def("exec", &PythonInterpreter::exec, Tcl::variadic())
+        .def("eval", &PythonInterpreter::eval, Tcl::variadic())
+        .def("str", &PythonInterpreter::str, Tcl::variadic())
+        .def("import", &PythonInterpreter::import, Tcl::variadic());
 }

@@ -3,6 +3,7 @@
 #include "polyhook2/Detour/ILCallback.hpp"
 #pragma warning( disable : 4244)
 
+#include "polyhook2/Tests/StackCanary.hpp"
 #include "polyhook2/Tests/TestEffectTracker.hpp"
 
 /**These tests can spontaneously fail if the compiler desides to optimize away
@@ -12,38 +13,11 @@ printf inside the body can mitigate this significantly. Do serious checking in d
 or releasewithdebinfo mode (relwithdebinfo optimizes sliiiightly less)**/
 
 EffectTracker effectsNTD64;
-
-typedef int(*Func)(void);
-TEST_CASE("Minimal Example", "[AsmJit]") {
-	asmjit::JitRuntime rt;                          // Runtime specialized for JIT code execution.
-
-	asmjit::CodeHolder code;                        // Holds code and relocation information.
-	code.init(rt.codeInfo());					// Initialize to the same arch as JIT runtime.
-
-	asmjit::x86::Assembler a(&code);                  // Create and attach X86Assembler to `code`.
-	a.mov(asmjit::x86::eax, 1);                     // Move one to 'eax' register.
-	a.ret();										// Return from function.
-	// ----> X86Assembler is no longer needed from here and can be destroyed <----
-	
-	Func fn;
-	asmjit::Error err = rt.add(&fn, &code);         // Add the generated code to the runtime.
-	if (err) {
-		REQUIRE(false);
-	}
-	
-	int result = fn();                      // Execute the generated code.
-	REQUIRE(result == 1);
-
-	// All classes use RAII, all resources will be released before `main()` returns,
-	// the generated function can be, however, released explicitly if you intend to
-	// reuse or keep the runtime alive, which you should in a production-ready code.
-	rt.release(fn);
-}
-
 #include "polyhook2/Detour/x64Detour.hpp"
 #include "polyhook2/CapstoneDisassembler.hpp"
 
 NOINLINE void hookMeInt(int a) {
+	PLH::StackCanary canary;
 	volatile int var = 1;
 	int var2 = var + a;
 
@@ -59,12 +33,14 @@ NOINLINE void hookMeInt(int a) {
 }
 
 NOINLINE void hookMeFloat(float a) {
+	PLH::StackCanary canary;
 	float ans = 1.0f;
 	ans += a;
 	printf("%f %f\n", ans, a); 
 }
 
 NOINLINE void hookMeIntFloatDouble(int a, float b, double c) {
+	PLH::StackCanary canary;
 	volatile float ans = 0.0f;
 	ans += (float)a;
 	ans += c;
@@ -74,6 +50,7 @@ NOINLINE void hookMeIntFloatDouble(int a, float b, double c) {
 
 NOINLINE void myCallback(const PLH::ILCallback::Parameters* p, const uint8_t count, const PLH::ILCallback::ReturnValue* retVal) {
 	PH_UNUSED(retVal);
+	PLH::StackCanary canary;
 
 	printf("Argument Count: %d\n", count);
 	for (int i = 0; i < count; i++) {
@@ -90,11 +67,11 @@ NOINLINE void myCallback(const PLH::ILCallback::Parameters* p, const uint8_t cou
 
 TEST_CASE("Minimal ILCallback", "[AsmJit][ILCallback]") {
 	PLH::ILCallback callback;
-
 	SECTION("Integer argument") {
+		PLH::StackCanary canary;
 		asmjit::FuncSignatureT<void, int> sig;
-		sig.setCallConv(asmjit::CallConv::kIdX86Win64);
-		uint64_t JIT = callback.getJitFunc(sig, &myCallback);
+		sig.setCallConv(asmjit::CallConv::kIdX64Windows);
+		uint64_t JIT = callback.getJitFunc(sig, asmjit::Environment::kArchHost, &myCallback);
 		REQUIRE(JIT != 0);
 
 		PLH::CapstoneDisassembler dis(PLH::Mode::x64);
@@ -108,7 +85,8 @@ TEST_CASE("Minimal ILCallback", "[AsmJit][ILCallback]") {
 	}
 
 	SECTION("Floating argument") {
-		uint64_t JIT = callback.getJitFunc("void", {"float"}, &myCallback);
+		PLH::StackCanary canary;
+		uint64_t JIT = callback.getJitFunc("void", {"float"}, asmjit::Environment::kArchHost, &myCallback);
 		REQUIRE(JIT != 0);
 
 		PLH::CapstoneDisassembler dis(PLH::Mode::x64);
@@ -122,7 +100,8 @@ TEST_CASE("Minimal ILCallback", "[AsmJit][ILCallback]") {
 	}
 
 	SECTION("Int, float, double arguments, string parsing types") {
-		uint64_t JIT = callback.getJitFunc("void", { "int", "float", "double" }, &myCallback);
+		PLH::StackCanary canary;
+		uint64_t JIT = callback.getJitFunc("void", { "int", "float", "double" }, asmjit::Environment::kArchHost, &myCallback);
 		REQUIRE(JIT != 0);
 
 		PLH::CapstoneDisassembler dis(PLH::Mode::x64);
@@ -139,6 +118,7 @@ TEST_CASE("Minimal ILCallback", "[AsmJit][ILCallback]") {
 
 NOINLINE void rw(int a, float b, double c, int type) {
 	PH_UNUSED(type);
+	PLH::StackCanary canary;
 	volatile float ans = 0.0f;
 	ans += (float)a;
 	ans += c;
@@ -151,6 +131,7 @@ NOINLINE void rw(int a, float b, double c, int type) {
 
 NOINLINE float rw_float(int a, float b, double c, int type) {
 	PH_UNUSED(type);
+	PLH::StackCanary canary;
 	volatile float ans = 0.0f;
 	ans += (float)a;
 	ans += c;
@@ -164,6 +145,7 @@ NOINLINE float rw_float(int a, float b, double c, int type) {
 
 NOINLINE double rw_double(int a, float b, double c, int type) {
 	PH_UNUSED(type);
+	PLH::StackCanary canary;
 	volatile float ans = 0.0f;
 	ans += (float)a;
 	ans += c;
@@ -177,6 +159,7 @@ NOINLINE double rw_double(int a, float b, double c, int type) {
 
 NOINLINE int rw_int(int a, float b, double c, int type) {
 	PH_UNUSED(type);
+	PLH::StackCanary canary;
 	volatile float ans = 0.0f;
 	ans += (float)a;
 	ans += c;
@@ -189,6 +172,7 @@ NOINLINE int rw_int(int a, float b, double c, int type) {
 }
 
 NOINLINE void mySecondCallback(const PLH::ILCallback::Parameters* p, const uint8_t count, const PLH::ILCallback::ReturnValue* retVal) {
+	PLH::StackCanary canary;
 	printf("Argument Count: %d\n", count);
 	for (int i = 0; i < count; i++) {
 		printf("Arg: %d asInt:%d asFloat:%f asDouble:%f\n", i, p->getArg<int>(i), p->getArg<float>(i), p->getArg<double>(i));
@@ -227,7 +211,8 @@ TEST_CASE("ILCallback Argument re-writing", "[ILCallback]") {
 	PLH::ILCallback callback;
 
 	SECTION("Int, float, double arguments host") {
-		uint64_t JIT = callback.getJitFunc("void", { "int", "float", "double", "int" }, &mySecondCallback);
+		PLH::StackCanary canary;
+		uint64_t JIT = callback.getJitFunc("void", { "int", "float", "double", "int" }, asmjit::Environment::kArchHost, &mySecondCallback);
 		REQUIRE(JIT != 0);
 
 		PLH::CapstoneDisassembler dis(PLH::Mode::x64);
@@ -241,7 +226,8 @@ TEST_CASE("ILCallback Argument re-writing", "[ILCallback]") {
 	}
 
 	SECTION("Int, float, double arguments, float ret, host") {
-		uint64_t JIT = callback.getJitFunc("float", { "int", "float", "double", "int" }, &mySecondCallback);
+		PLH::StackCanary canary;
+		uint64_t JIT = callback.getJitFunc("float", { "int", "float", "double", "int" }, asmjit::Environment::kArchHost, &mySecondCallback);
 		REQUIRE(JIT != 0);
 
 		PLH::CapstoneDisassembler dis(PLH::Mode::x64);
@@ -256,7 +242,8 @@ TEST_CASE("ILCallback Argument re-writing", "[ILCallback]") {
 	}
 
 	SECTION("Int, float, double arguments, double ret, host") {
-		uint64_t JIT = callback.getJitFunc("double", { "int", "float", "double", "int" }, &mySecondCallback);
+		PLH::StackCanary canary;
+		uint64_t JIT = callback.getJitFunc("double", { "int", "float", "double", "int" }, asmjit::Environment::kArchHost, &mySecondCallback);
 		REQUIRE(JIT != 0);
 
 		PLH::CapstoneDisassembler dis(PLH::Mode::x64);

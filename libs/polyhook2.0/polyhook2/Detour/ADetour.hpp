@@ -49,6 +49,8 @@ class Detour : public PLH::IHook {
 public:
 	Detour(const uint64_t fnAddress, const uint64_t fnCallback, uint64_t* userTrampVar, PLH::ADisassembler& dis) : m_disasm(dis) {
 		assert(fnAddress != 0 && fnCallback != 0);
+		assert(sizeof(*userTrampVar) == sizeof(uint64_t) && "Given trampoline holder to small");
+
 		m_fnAddress = fnAddress;
 		m_fnCallback = fnCallback;
 		m_trampoline = NULL;
@@ -59,6 +61,8 @@ public:
 
 	Detour(const char* fnAddress, const char* fnCallback, uint64_t* userTrampVar, PLH::ADisassembler& dis) : m_disasm(dis) {
 		assert(fnAddress != nullptr && fnCallback != nullptr);
+		assert(sizeof(*userTrampVar) == sizeof(uint64_t) && "Given trampoline holder to small");
+
 		m_fnAddress = (uint64_t)fnAddress;
 		m_fnCallback = (uint64_t)fnCallback;
 		m_trampoline = NULL;
@@ -67,9 +71,20 @@ public:
 		m_userTrampVar = userTrampVar;
 	}
 
-	virtual ~Detour() = default;
+	virtual ~Detour() {
+		if (m_hooked) {
+			unHook();
+		}
+	}
 
 	virtual bool unHook() override;
+
+	/**
+	This is for restoring hook bytes if a 3rd party uninstalled them.
+	DO NOT call this after unHook(). This may only be called after hook() 
+	but before unHook()
+	**/
+	virtual bool reHook() override;
 
 	virtual HookType getType() const override {
 		return HookType::Detour;
@@ -86,6 +101,14 @@ protected:
 
 	PLH::insts_t			m_originalInsts;
 
+	/*Save the instructions used for the hook so that we can re-write in rehook()
+	Note: There's a nop range we store too so that it doesn't need to be re-calculated
+	*/
+	PLH::insts_t            m_hookInsts;
+	uint16_t                m_nopProlOffset;
+	uint16_t                m_nopSize;
+	uint32_t                m_hookSize;
+
 	/**Walks the given vector of instructions and sets roundedSz to the lowest size possible that doesn't split any instructions and is greater than minSz.
 	If end of function is encountered before this condition an empty optional is returned. Returns instructions in the range start to adjusted end**/
 	std::optional<insts_t> calcNearestSz(const insts_t& functionInsts, const uint64_t minSz,
@@ -94,7 +117,7 @@ protected:
 	/**If function starts with a jump follow it until the first non-jump instruction, recursively. This handles already hooked functions
 	and also compilers that emit jump tables on function call. Returns true if resolution was successful (nothing to resolve, or resolution worked),
 	false if resolution failed.**/
-	bool followJmp(insts_t& functionInsts, const uint8_t curDepth = 0, const uint8_t depth = 3);
+	bool followJmp(insts_t& functionInsts, const uint8_t curDepth = 0, const uint8_t depth = 5);
 
 	/**Expand the prologue up to the address of the last jmp that points back into the prologue. This
 	is necessary because we modify the location of things in the prologue, so re-entrant jmps point
@@ -110,7 +133,11 @@ protected:
 	template<typename MakeJmpFn>
 	PLH::insts_t relocateTrampoline(insts_t& prologue, uint64_t jmpTblStart, const int64_t delta, const uint8_t jmpSz, MakeJmpFn makeJmp, const PLH::insts_t& instsNeedingReloc, const PLH::insts_t& instsNeedingEntry);
 
-	bool                    m_hooked;
+	/**
+	Insert nops from [Base, Base+size). We _MUST_ insert multi-byte nops so we don't accidentally
+	confused our code cave finder for x64
+	**/
+	void writeNop(uint64_t base, uint32_t size);
 };
 
 template<typename MakeJmpFn>
@@ -123,13 +150,13 @@ PLH::insts_t PLH::Detour::relocateTrampoline(insts_t& prologue, uint64_t jmpTblS
 			assert(inst.hasDisplacement());
 			// make an entry pointing to where inst did point to
 			auto entry = makeJmp(jmpTblCurAddr, inst.getDestination());
-
+			
 			// move inst to trampoline and point instruction to entry
 			inst.setAddress(inst.getAddress() + delta);
 			inst.setDestination(jmpTblCurAddr);
 			jmpTblCurAddr += jmpSz;
 
-			m_disasm.writeEncoding(entry);
+			m_disasm.writeEncoding(entry, *this);
 			jmpTblEntries.insert(jmpTblEntries.end(), entry.begin(), entry.end());
 		} else if (std::find(instsNeedingReloc.begin(), instsNeedingReloc.end(), inst) != instsNeedingReloc.end()) {
 			assert(inst.hasDisplacement());
@@ -141,7 +168,7 @@ PLH::insts_t PLH::Detour::relocateTrampoline(insts_t& prologue, uint64_t jmpTblS
 			inst.setAddress(inst.getAddress() + delta);
 		}
 
-		m_disasm.writeEncoding(inst);
+		m_disasm.writeEncoding(inst, *this);
 	}
 	return jmpTblEntries;
 }

@@ -21,7 +21,11 @@
 //    misrepresented as being the original software.
 // 3. This notice may not be removed or altered from any source distribution.
 
+#include <asmjit/core.h>
+
+#if defined(ASMJIT_BUILD_X86) && ASMJIT_ARCH_X86
 #include <asmjit/x86.h>
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -48,7 +52,7 @@ static void makeRawFunc(x86::Emitter* emitter) noexcept {
 
   // Create and initialize `FuncDetail` and `FuncFrame`.
   FuncDetail func;
-  func.init(FuncSignatureT<void, int*, const int*, const int*>(CallConv::kIdHost));
+  func.init(FuncSignatureT<void, int*, const int*, const int*>(CallConv::kIdHost), emitter->environment());
 
   FuncFrame frame;
   frame.init(func);
@@ -101,10 +105,11 @@ static void makeCompiledFunc(x86::Compiler* cc) noexcept {
 static uint32_t testFunc(JitRuntime& rt, uint32_t emitterType) noexcept {
 #ifndef ASMJIT_NO_LOGGING
   FileLogger logger(stdout);
+  logger.setIndentation(FormatOptions::kIndentationCode, 2);
 #endif
 
   CodeHolder code;
-  code.init(rt.codeInfo());
+  code.init(rt.environment());
 
 #ifndef ASMJIT_NO_LOGGING
   code.setLogger(&logger);
@@ -173,8 +178,10 @@ static uint32_t testFunc(JitRuntime& rt, uint32_t emitterType) noexcept {
 }
 
 int main() {
-  unsigned nFailed = 0;
+  printf("AsmJit X86 Emitter Test\n\n");
+
   JitRuntime rt;
+  unsigned nFailed = 0;
 
   nFailed += testFunc(rt, BaseEmitter::kTypeAssembler);
 
@@ -187,9 +194,15 @@ int main() {
 #endif
 
   if (!nFailed)
-    printf("[PASSED] All tests passed\n");
+    printf("Success:\n  All tests passed\n");
   else
-    printf("[FAILED] %u %s failed\n", nFailed, nFailed == 1 ? "test" : "tests");
+    printf("Failure:\n  %u %s failed\n", nFailed, nFailed == 1 ? "test" : "tests");
 
   return nFailed ? 1 : 0;
 }
+#else
+int main() {
+  printf("AsmJit X86 Emitter Test is disabled on non-x86 host\n\n");
+  return 0;
+}
+#endif

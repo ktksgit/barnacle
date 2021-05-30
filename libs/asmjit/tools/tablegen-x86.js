@@ -221,6 +221,9 @@ class GenUtils {
         }
       }
 
+      if (dbInst.attributes.Tsib)
+        f.Tsib = true;
+
       if (dbInst.vsibReg)
         f.Vsib = true;
 
@@ -276,6 +279,20 @@ class GenUtils {
         return false;
 
       x++;
+    }
+  }
+
+  // Prevent some instructions from having implicit memory size if that would
+  // make them ambiguous. There are some instructions where the ambiguity is
+  // okay, but some like 'push' and 'pop' where it isn't.
+  static canUseImplicitMemSize(name) {
+    switch (name) {
+      case "pop":
+      case "push":
+        return false;
+
+      default:
+        return true;
     }
   }
 
@@ -509,7 +526,9 @@ class X86TableGen extends core.TableGen {
             String(inst.encoding  ).padEnd(19) + ", " +
             String(inst.opcode0   ).padEnd(26) + ", " +
             String(inst.opcode1   ).padEnd(26) + ", " +
-            String("0"            ).padEnd( 4) + ", " +
+            String("0"            ).padEnd( 3) + ", " +
+            String("0"            ).padEnd( 3) + ", " +
+            String("0"            ).padEnd( 5) + ", " +
             String("0"            ).padEnd( 3) + ", " +
             String("0"            ).padEnd( 3) + "),\n";
         }
@@ -547,7 +566,7 @@ class X86TableGen extends core.TableGen {
     var enum_    = name[0].toUpperCase() + name.substr(1);
 
     var opcode   = dbi.opcodeHex;
-    var rm       = dbi.rm;
+    var modR     = dbi.modR;
     var mm       = dbi.mm;
     var pp       = dbi.pp;
     var encoding = dbi.encoding;
@@ -585,7 +604,7 @@ class X86TableGen extends core.TableGen {
       }
 
       if (opcode   !== dbi.opcodeHex ) { console.log(`ISSUE: Opcode ${opcode} != ${dbi.opcodeHex}`); return null; }
-      if (rm       !== dbi.rm        ) { console.log(`ISSUE: RM ${rm} != ${dbi.rm}`); return null; }
+      if (modR     !== dbi.modR      ) { console.log(`ISSUE: ModR ${modR} != ${dbi.modR}`); return null; }
       if (mm       !== dbi.mm        ) { console.log(`ISSUE: MM ${mm} != ${dbi.mm}`); return null; }
       if (pp       !== dbi.pp        ) { console.log(`ISSUE: PP ${pp} != ${dbi.pp}`); return null; }
       if (encoding !== dbi.encoding  ) { console.log(`ISSUE: Enc ${encoding} != ${dbi.encoding}`); return null; }
@@ -600,12 +619,12 @@ class X86TableGen extends core.TableGen {
       type  : isVec ? "V" : "O",
       prefix: ppmm,
       opcode: opcode,
-      o     : rm === "r" ? "_" : (rm ? rm : "_"),
+      o     : modR === "r" ? "_" : (modR ? modR : "_"),
       l     : vexL !== undefined ? vexL : "_",
       w     : vexW !== undefined ? vexW : "_",
       ew    : evexW !== undefined ? evexW : "_",
       en    : "_",
-      tt    : "_  "
+      tt    : dbi.modRM ? dbi.modRM + "  " : "_  "
     });
 
     return {
@@ -731,7 +750,7 @@ class AltOpcodeTable extends core.Task {
       }
 
       // X(______,OP,_,_,_,_,_,_  )
-      if (opcode.startsWith("O_FPU(") || opcode.startsWith("O(") || opcode.startsWith("V(") || opcode.startsWith("E(")) {
+      if (opcode.startsWith("O(") || opcode.startsWith("V(") || opcode.startsWith("E(")) {
         var value = opcode.substring(9, 11);
         var remaining = opcode.substring(0, 9) + "00" + opcode.substring(11);
 
@@ -930,6 +949,7 @@ const OpToAsmJitOp = {
   "dreg"    : "F(DReg)",
   "st"      : "F(St)",
   "bnd"     : "F(Bnd)",
+  "tmm"     : "F(Tmm)",
 
   "mem"     : "F(Mem)",
   "vm"      : "F(Vm)",
@@ -1096,7 +1116,8 @@ class OSignature {
         case "mm"      :
         case "xmm"     :
         case "ymm"     :
-        case "zmm"     : mFlags[k] = true; break;
+        case "zmm"     :
+        case "tmm"     : mFlags[k] = true; break;
 
         case "m8"      :
         case "m16"     :
@@ -1108,8 +1129,9 @@ class OSignature {
         case "m256"    :
         case "m512"    :
         case "m1024"   : mFlags.mem = true; mMemFlags[k] = true; break;
-        case "mib"     : mFlags.mem = true; mMemFlags.mib   = true; break;
-        case "mem"     : mFlags.mem = true; mMemFlags.mAny  = true; break;
+        case "mib"     : mFlags.mem = true; mMemFlags.mib = true; break;
+        case "mem"     : mFlags.mem = true; mMemFlags.mAny = true; break;
+        case "tmem"    : mFlags.mem = true; mMemFlags.mAny = true; break;
 
         case "memBase" : mFlags.mem = true; mMemFlags.memBase = true; break;
         case "memDS"   : mFlags.mem = true; mMemFlags.memDS = true; break;
@@ -1398,7 +1420,8 @@ class SignatureArray extends Array {
       // Patch all instructions to accept implicit-size memory operand.
       for (bIndex = 0; bIndex < sameSizeSet.length; bIndex++) {
         const bInst = sameSizeSet[bIndex];
-        if (implicit) bInst[memPos].flags.mem = true;
+        if (implicit)
+          bInst[memPos].flags.mem = true;
 
         if (!implicit)
           DEBUG(`${this.name}: Explicit: ${bInst}`);
@@ -1689,7 +1712,9 @@ class InstSignatureTable extends core.Task {
       }
     }
 
-    signatures.calcImplicitMemSize();
+    if (signatures.length && GenUtils.canUseImplicitMemSize(dbInsts[0].name))
+      signatures.calcImplicitMemSize();
+
     signatures.simplify();
     signatures.compact();
 
@@ -1814,12 +1839,14 @@ class InstRWInfoTable extends core.Task {
   constructor() {
     super("InstRWInfoTable");
 
-    this.rwInfoIndex = [];
-    this.rwInfoTable = new IndexedArray();
+    this.rwInfoIndexA = [];
+    this.rwInfoIndexB = [];
+    this.rwInfoTableA = new IndexedArray();
+    this.rwInfoTableB = new IndexedArray();
+
     this.rmInfoTable = new IndexedArray();
     this.opInfoTable = new IndexedArray();
 
-    const _ = null;
     this.rwCategoryByName = {
       "imul"      : "Imul",
       "mov"       : "Mov",
@@ -1833,6 +1860,8 @@ class InstRWInfoTable extends core.Task {
       "vpmaskmovd": "Vmaskmov",
       "vpmaskmovq": "Vmaskmov"
     };
+
+    const _ = null;
     this.rwCategoryByData = {
       Vmov1_8: [
         [{access: "W", flags: {}, fixed: -1, index: 0, width:  8}, {access: "R", flags: {}, fixed: -1, index: 0, width: 64},_,_,_,_],
@@ -1900,8 +1929,8 @@ class InstRWInfoTable extends core.Task {
       const o2Insts = dbInsts.filter((inst) => { return inst.operands.length === 2; });
       const oxInsts = dbInsts.filter((inst) => { return inst.operands.length !== 2; });
 
-      const rwInfoArray = [this.rwInfo(o2Insts), this.rwInfo(oxInsts)];
-      const rmInfoArray = [this.rmInfo(o2Insts), this.rmInfo(oxInsts)];
+      const rwInfoArray = [this.rwInfo(inst, o2Insts), this.rwInfo(inst, oxInsts)];
+      const rmInfoArray = [this.rmInfo(inst, o2Insts), this.rmInfo(inst, oxInsts)];
 
       for (var i = 0; i < 2; i++) {
         const rwInfo = rwInfoArray[i];
@@ -1954,21 +1983,30 @@ class InstRWInfoTable extends core.Task {
           CxxUtils.struct(...(rwOpsIndex.map(function(item) { return String(item).padEnd(2); })))
         );
 
-        this.rwInfoIndex.push(this.rwInfoTable.addIndexed(rwData));
+        if (i == 0)
+          this.rwInfoIndexA.push(this.rwInfoTableA.addIndexed(rwData));
+        else
+          this.rwInfoIndexB.push(this.rwInfoTableB.addIndexed(rwData));
       }
     });
 
     var s = "";
-    s += "const uint8_t InstDB::rwInfoIndex[Inst::_kIdCount * 2] = {\n" + StringUtils.format(this.rwInfoIndex, kIndent, -1) + "\n};\n";
+    s += "const uint8_t InstDB::rwInfoIndexA[Inst::_kIdCount] = {\n" + StringUtils.format(this.rwInfoIndexA, kIndent, -1) + "\n};\n";
     s += "\n";
-    s += "const InstDB::RWInfo InstDB::rwInfo[] = {\n" + StringUtils.format(this.rwInfoTable, kIndent, true) + "\n};\n";
+    s += "const uint8_t InstDB::rwInfoIndexB[Inst::_kIdCount] = {\n" + StringUtils.format(this.rwInfoIndexB, kIndent, -1) + "\n};\n";
+    s += "\n";
+    s += "const InstDB::RWInfo InstDB::rwInfoA[] = {\n" + StringUtils.format(this.rwInfoTableA, kIndent, true) + "\n};\n";
+    s += "\n";
+    s += "const InstDB::RWInfo InstDB::rwInfoB[] = {\n" + StringUtils.format(this.rwInfoTableB, kIndent, true) + "\n};\n";
     s += "\n";
     s += "const InstDB::RWInfoOp InstDB::rwInfoOp[] = {\n" + StringUtils.format(this.opInfoTable, kIndent, true) + "\n};\n";
     s += "\n";
     s += "const InstDB::RWInfoRm InstDB::rwInfoRm[] = {\n" + StringUtils.format(this.rmInfoTable, kIndent, true) + "\n};\n";
 
-    const size = this.rwInfoIndex.length +
-                 this.rwInfoTable.length * 8 +
+    const size = this.rwInfoIndexA.length +
+                 this.rwInfoIndexB.length +
+                 this.rwInfoTableA.length * 8 +
+                 this.rwInfoTableB.length * 8 +
                  this.rmInfoTable.length * 4 +
                  this.opInfoTable.length * 24;
 
@@ -2006,7 +2044,9 @@ class InstRWInfoTable extends core.Task {
   // Read/Write Info
   // ---------------
 
-  rwInfo(dbInsts) {
+  rwInfo(asmInst, dbInsts) {
+    const self = this;
+
     function nullOps() {
       return [null, null, null, null, null, null];
     }
@@ -2051,6 +2091,9 @@ class InstRWInfoTable extends core.Task {
 
           if (op.zext)
             d.flags.ZExt = true;
+
+          for (var k in self.rwOpFlagsForInstruction(asmInst.name, j))
+            d.flags[k] = true;
 
           if ((step === -1 || step === j) || op.rwxIndex !== 0 || op.rwxWidth !== opSize) {
             d.index = op.rwxIndex;
@@ -2147,10 +2190,29 @@ class InstRWInfoTable extends core.Task {
     return null;
   }
 
+  rwOpFlagsForInstruction(instName, opIndex) {
+    const toMap = MapUtils.arrayToMap;
+
+    // TODO: We should be able to get this information from asmdb.
+    switch (instName + "@" + opIndex) {
+      case "cmps@0": return toMap(['MemBaseRW', 'MemBasePostModify']);
+      case "cmps@1": return toMap(['MemBaseRW', 'MemBasePostModify']);
+      case "movs@0": return toMap(['MemBaseRW', 'MemBasePostModify']);
+      case "movs@1": return toMap(['MemBaseRW', 'MemBasePostModify']);
+      case "lods@1": return toMap(['MemBaseRW', 'MemBasePostModify']);
+      case "stos@0": return toMap(['MemBaseRW', 'MemBasePostModify']);
+      case "scas@1": return toMap(['MemBaseRW', 'MemBasePostModify']);
+      case "bndstx@0": return toMap(['MemBaseWrite', 'MemIndexWrite']);
+
+      default:
+        return {};
+    }
+  }
+
   // Reg/Mem Info
   // ------------
 
-  rmInfo(dbInsts) {
+  rmInfo(asmInst, dbInsts) {
     const info = {
       category: "None",
       rmIndexes: this.rmReplaceableIndexes(dbInsts),

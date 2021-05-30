@@ -774,6 +774,11 @@ result interpreter::setVar(string const &variableName, object const &scalarTclVa
 	return result(interp_);
 }
 
+void interpreter::setResult(object const &o)
+{
+    details::set_result(interp_, o);
+}
+
 bool interpreter::exists(string const &variableName, string const &indexName) {
     object n = object(variableName.c_str());
     object i = object(indexName.c_str());

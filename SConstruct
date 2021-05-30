@@ -1,8 +1,8 @@
 import os
 
-AddOption('--mingw',
+AddOption('--nomingw',
           dest='mingw',
-          action='store_true',
+          action='store_false',
           default=True,
           help='mingw build (defaults to gcc)')
 
@@ -51,11 +51,13 @@ if is_mingw == True:
         variables=vars,
         tools = ['mingw']
     )
+    env["is_mingw"] = True
 else:
     env = Environment(
         variables=vars,
         TARGET_ARCH='x86'
     )
+    env["is_mingw"] = False
     print ('Visual Studio build')
     env.AppendUnique(CXXFLAGS =['/EHsc'])
 
@@ -98,6 +100,8 @@ if is_mingw:
         env.AppendUnique(CXXFLAGS=['-g'])
         env.AppendUnique(CFLAGS=['-g'])
 else:
+    env.AppendUnique(CXXFLAGS=['/std:c++17']
+    )
     if nodebug or releasedebug:
         env.AppendUnique(CPPFLAGS =['/W3',  '/MD', '/Od'],#, '/Gs'],
                          LINKFLAGS=['/RELEASE']
@@ -131,8 +135,6 @@ tclStubLib_obj)= env.SConscript('libs/tcl8.3.2/SConscript_main.py',
                exports='nodebug is_mingw windows'
 )
 
-tcl_dll_full_path = os.path.join(tcl_bin_install_dir, tcl_lib_name + '.dll')
-
 env.AppendUnique(CPPPATH = [capstone_include_path,
                             tcl_includes],
                 # CPPDEFINES = {'__thiscall' : ''},
@@ -149,23 +151,21 @@ Export('pyenv')
 (tclpython_dll,
 static_cpptcl,
 static_cpptcl_no_stubs,
-py3_obj,
-cpptcl_includes,
-pybind11_includes) = pyenv.SConscript(f'{variant_dir}/libs/libs.SConscript',
+py3_static) = pyenv.SConscript(f'{variant_dir}/libs/libs.SConscript',
             exports='tclStubLib_obj',
 )
 
 all_targets = [
+    tclpython_dll,
     static_cpptcl,
     static_cpptcl_no_stubs,
-    py3_obj
+    py3_static
 ]
 
 env.CompileCommands('object', all_targets)
 
 if is_mingw and env["windows"]:
     install_dir = Dir('#/bin').abspath
-    env.Install(install_dir, tcl_dll_full_path)
 
     path = os.environ['PATH']
     path = [x for x in path.split(';') if 'mingw32' in x][0]

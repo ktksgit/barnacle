@@ -50,13 +50,13 @@ public:
   typedef RAAssignment::PhysToWorkMap PhysToWorkMap;
   typedef RAAssignment::WorkToPhysMap WorkToPhysMap;
 
-  //! Link to `RAPass`.
-  RAPass* _pass;
+  //! Link to `BaseRAPass`.
+  BaseRAPass* _pass;
   //! Link to `BaseCompiler`.
   BaseCompiler* _cc;
 
   //! Architecture traits.
-  RAArchTraits _archTraits;
+  const ArchTraits* _archTraits;
   //! Registers available to the allocator.
   RARegMask _availableRegs;
   //! Registers clobbered by the allocator.
@@ -82,7 +82,7 @@ public:
   //! \name Construction & Destruction
   //! \{
 
-  inline RALocalAllocator(RAPass* pass) noexcept
+  inline RALocalAllocator(BaseRAPass* pass) noexcept
     : _pass(pass),
       _cc(pass->cc()),
       _archTraits(pass->_archTraits),
@@ -155,10 +155,10 @@ public:
     bool tryMode) noexcept;
 
   inline Error spillRegsBeforeEntry(RABlock* block) noexcept {
-    return spillGpScratchRegsBeforeEntry(block->entryScratchGpRegs());
+    return spillScratchGpRegsBeforeEntry(block->entryScratchGpRegs());
   }
 
-  Error spillGpScratchRegsBeforeEntry(uint32_t scratchRegs) noexcept;
+  Error spillScratchGpRegsBeforeEntry(uint32_t scratchRegs) noexcept;
 
   //! \}
 
@@ -198,12 +198,13 @@ public:
   //! Decides on register assignment.
   uint32_t decideOnAssignment(uint32_t group, uint32_t workId, uint32_t assignedId, uint32_t allocableRegs) const noexcept;
 
-  //! Decides on whether to MOVE or SPILL the given WorkReg.
+  //! Decides on whether to MOVE or SPILL the given WorkReg, because it's allocated
+  //! in a physical register that have to be used by another WorkReg.
   //!
   //! The function must return either `RAAssignment::kPhysNone`, which means that
-  //! the WorkReg should be spilled, or a valid physical register ID, which means
-  //! that the register should be moved to that physical register instead.
-  uint32_t decideOnUnassignment(uint32_t group, uint32_t workId, uint32_t assignedId, uint32_t allocableRegs) const noexcept;
+  //! the WorkReg of `workId` should be spilled, or a valid physical register ID,
+  //! which means that the register should be moved to that physical register instead.
+  uint32_t decideOnReassignment(uint32_t group, uint32_t workId, uint32_t assignedId, uint32_t allocableRegs) const noexcept;
 
   //! Decides on best spill given a register mask `spillableRegs`
   uint32_t decideOnSpillFor(uint32_t group, uint32_t workId, uint32_t spillableRegs, uint32_t* spillWorkId) const noexcept;
@@ -218,7 +219,7 @@ public:
   inline Error onMoveReg(uint32_t group, uint32_t workId, uint32_t dstPhysId, uint32_t srcPhysId) noexcept {
     if (dstPhysId == srcPhysId) return kErrorOk;
     _curAssignment.reassign(group, workId, dstPhysId, srcPhysId);
-    return _pass->onEmitMove(workId, dstPhysId, srcPhysId);
+    return _pass->emitMove(workId, dstPhysId, srcPhysId);
   }
 
   //! Emits a swap between two physical registers and fixes their assignment.
@@ -226,14 +227,14 @@ public:
   //! \note Target must support this operation otherwise this would ASSERT.
   inline Error onSwapReg(uint32_t group, uint32_t aWorkId, uint32_t aPhysId, uint32_t bWorkId, uint32_t bPhysId) noexcept {
     _curAssignment.swap(group, aWorkId, aPhysId, bWorkId, bPhysId);
-    return _pass->onEmitSwap(aWorkId, aPhysId, bWorkId, bPhysId);
+    return _pass->emitSwap(aWorkId, aPhysId, bWorkId, bPhysId);
   }
 
   //! Emits a load from [VirtReg/WorkReg]'s spill slot to a physical register
   //! and makes it assigned and clean.
   inline Error onLoadReg(uint32_t group, uint32_t workId, uint32_t physId) noexcept {
     _curAssignment.assign(group, workId, physId, RAAssignment::kClean);
-    return _pass->onEmitLoad(workId, physId);
+    return _pass->emitLoad(workId, physId);
   }
 
   //! Emits a save a physical register to a [VirtReg/WorkReg]'s spill slot,
@@ -243,7 +244,7 @@ public:
     ASMJIT_ASSERT(_curAssignment.physToWorkId(group, physId) == workId);
 
     _curAssignment.makeClean(group, workId, physId);
-    return _pass->onEmitSave(workId, physId);
+    return _pass->emitSave(workId, physId);
   }
 
   //! Assigns a register, the content of it is undefined at this point.

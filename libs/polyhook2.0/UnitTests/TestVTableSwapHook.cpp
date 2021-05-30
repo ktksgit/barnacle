@@ -3,6 +3,7 @@
 #include <Catch.hpp>
 
 #include "polyhook2/Virtuals/VTableSwapHook.hpp"
+#include "polyhook2/Tests/StackCanary.hpp"
 #include "polyhook2/Tests/TestEffectTracker.hpp"
 
 EffectTracker vTblSwapEffects;
@@ -11,35 +12,33 @@ class VirtualTest {
 public:
 	virtual ~VirtualTest() {}
 
-	virtual int NoParamVirt() {
+	virtual int __stdcall NoParamVirt() {
 		return 4;
 	}
 
-	virtual int NoParamVirt2() {
+	virtual int __stdcall NoParamVirt2() {
 		return 7;
 	}
 };
 
 #pragma warning(disable: 4100)
-
-typedef int(__thiscall* tVirtNoParams)(uintptr_t pThis);
 PLH::VFuncMap origVFuncs;
-
-NOINLINE int __fastcall hkVirtNoParams(uintptr_t pThis) {
+HOOK_CALLBACK(&VirtualTest::NoParamVirt, hkVirtNoParams, {
 	vTblSwapEffects.PeakEffect().trigger();
-	return ((tVirtNoParams)origVFuncs.at(1))(pThis);
-}
+	return ((hkVirtNoParams_t)origVFuncs.at(1))(_args...);
+});
 
-NOINLINE int __fastcall hkVirt2NoParams(uintptr_t pThis) {
+HOOK_CALLBACK(&VirtualTest::NoParamVirt2, hkVirt2NoParams, {
 	vTblSwapEffects.PeakEffect().trigger();
-	return ((tVirtNoParams)origVFuncs.at(2))(pThis);
-}
+	return ((hkVirt2NoParams_t)origVFuncs.at(2))(_args...);
+});
 
 TEST_CASE("VTableSwap tests", "[VTableSwap]") {
 	std::shared_ptr<VirtualTest> ClassToHook(new VirtualTest);
 
 	SECTION("Verify vtable redirected") {
-		PLH::VFuncMap redirect = {{(uint16_t)1, (uint64_t)&hkVirtNoParams}};
+		PLH::StackCanary canary;
+		PLH::VFuncMap redirect = {{(uint16_t)1, (uint64_t)hkVirtNoParams}};
 		PLH::VTableSwapHook hook((char*)ClassToHook.get(), redirect);
 		REQUIRE(hook.hook());
 		origVFuncs = hook.getOriginals();
@@ -52,7 +51,8 @@ TEST_CASE("VTableSwap tests", "[VTableSwap]") {
 	}
 
 	SECTION("Verify multiple vtable redirected") {
-		PLH::VFuncMap redirect = {{(uint16_t)1, (uint64_t)&hkVirtNoParams},{(uint16_t)2, (uint64_t)&hkVirtNoParams}};
+		PLH::StackCanary canary;
+		PLH::VFuncMap redirect = {{(uint16_t)1, (uint64_t)hkVirtNoParams},{(uint16_t)2, (uint64_t)hkVirtNoParams}};
 		PLH::VTableSwapHook hook((char*)ClassToHook.get(), redirect);
 		REQUIRE(hook.hook());
 		origVFuncs = hook.getOriginals();

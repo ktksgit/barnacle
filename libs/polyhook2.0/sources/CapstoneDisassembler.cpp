@@ -7,7 +7,7 @@ PLH::CapstoneDisassembler::CapstoneDisassembler(const PLH::Mode mode) : ADisasse
 	const cs_mode csMode = (mode == PLH::Mode::x64 ? CS_MODE_64 : CS_MODE_32);
 	if (cs_open(CS_ARCH_X86, csMode, &m_capHandle) != CS_ERR_OK) {
 		m_capHandle = NULL;
-		ErrorLog::singleton().push("Failed to initialize capstone", ErrorLevel::SEV);
+		Log::log("Failed to initialize capstone", ErrorLevel::SEV);
 	}
 
 	cs_option(m_capHandle, CS_OPT_DETAIL, CS_OPT_ON);
@@ -20,13 +20,25 @@ PLH::CapstoneDisassembler::~CapstoneDisassembler() {
 }
 
 PLH::insts_t
-PLH::CapstoneDisassembler::disassemble(uint64_t firstInstruction, uint64_t start, uint64_t End) {
+PLH::CapstoneDisassembler::disassemble(uint64_t firstInstruction, uint64_t start, uint64_t End, const MemAccessor& accessor) {
 	cs_insn* insInfo = cs_malloc(m_capHandle);
 	insts_t insVec;
 	m_branchMap.clear();
 
 	uint64_t size = End - start;
-	while (cs_disasm_iter(m_capHandle, (const uint8_t**)&firstInstruction, (size_t*)&size, &start, insInfo)) {
+	assert(size > 0);
+	if (size <= 0)
+		return insVec;
+
+	// copy potentially remote memory to local buffer
+	uint8_t* buf = new uint8_t[(uint32_t)size];
+
+	// bufAddr updated by cs_disasm_iter
+	uint64_t bufAddr = (uint64_t)buf;
+	accessor.mem_copy((uint64_t)buf, firstInstruction, size);
+
+	bool endHit = false;
+	while (cs_disasm_iter(m_capHandle, (const uint8_t**)&bufAddr, (size_t*)&size, &start, insInfo)) {
 		// Set later by 'SetDisplacementFields'
 		Instruction::Displacement displacement = {};
 		displacement.Absolute = 0;
@@ -35,6 +47,7 @@ PLH::CapstoneDisassembler::disassemble(uint64_t firstInstruction, uint64_t start
 						 displacement,
 						 0,
 						 false,
+			             false,
 						 insInfo->bytes,
 						 insInfo->size,
 						 insInfo->mnemonic,
@@ -42,11 +55,18 @@ PLH::CapstoneDisassembler::disassemble(uint64_t firstInstruction, uint64_t start
 						 m_mode);
 
 		setDisplacementFields(inst, insInfo);
+		if (endHit && !isPadBytes(inst))
+			break;
+
 		insVec.push_back(inst);
 
 		// searches instruction vector and updates references
 		addToBranchMap(insVec, inst);
+
+		if (isFuncEnd(inst))
+			endHit = true;
 	}
+	delete[] buf;
 	cs_free(insInfo, 1);
 	return insVec;
 }
@@ -66,20 +86,40 @@ void PLH::CapstoneDisassembler::setDisplacementFields(PLH::Instruction& inst, co
 		if (op.type == X86_OP_MEM) {
 			// Are we relative to instruction pointer?
 			// mem are types like jmp [rip + 0x4] where location is dereference-d
-			if (op.mem.base != getIpReg()) {
-				if (hasGroup(capInst, x86_insn_group::X86_GRP_JUMP) && inst.getBytes().at(0) == 0xff && inst.getBytes().at(1) == 0x25) {
-					// far jmp 0xff, 0x25, holder jmp [0xdeadbeef]
-					inst.setAbsoluteDisplacement(*(uint32_t*)op.mem.disp);
+
+			bool needsDisplacement = false;
+			if ((hasGroup(capInst, x86_insn_group::X86_GRP_JUMP) && inst.size() >= 2 && inst.getBytes().at(0) == 0xff && inst.getBytes().at(1) == 0x25) ||
+				(hasGroup(capInst, x86_insn_group::X86_GRP_CALL) && inst.size() >= 2 && inst.getBytes().at(0) == 0xff && inst.getBytes().at(1) == 0x15) ||
+
+				// skip rex prefix
+			    (hasGroup(capInst, x86_insn_group::X86_GRP_JUMP) && inst.size() >= 3 && inst.getBytes().at(1) == 0xff && inst.getBytes().at(2) == 0x25) ||
+				(hasGroup(capInst, x86_insn_group::X86_GRP_CALL) && inst.size() >= 3 && inst.getBytes().at(1) == 0xff && inst.getBytes().at(2) == 0x25)
+				)
+			{
+				// far jmp 0xff, 0x25, holder jmp [0xdeadbeef]
+				inst.setIndirect(true);
+
+				if (m_mode == Mode::x86) {
+					needsDisplacement = true;
 				}
-				continue;
+			} 
+
+			if (op.mem.base == getIpReg()) {
+				const uint8_t offset = x86.encoding.disp_offset;
+				const uint8_t size = std::min<uint8_t>(x86.encoding.disp_size,
+					std::min<uint8_t>(sizeof(uint64_t), (uint8_t)(capInst->size - x86.encoding.disp_offset)));
+
+				// it's relative, set immDest to max to trigger later check
+				copyDispSx(inst, offset, size, std::numeric_limits<int64_t>::max());
+			} else if (needsDisplacement) {
+				const uint8_t offset = x86.encoding.disp_offset;
+				const uint8_t size = std::min<uint8_t>(x86.encoding.disp_size,
+					std::min<uint8_t>(sizeof(uint64_t), (uint8_t)(capInst->size - x86.encoding.disp_offset)));
+
+				// it's absolute
+				copyDispSx(inst, offset, size, op.mem.disp);
 			}
 
-			const uint8_t offset = x86.encoding.disp_offset;
-			const uint8_t size = std::min<uint8_t>(x86.encoding.disp_size,
-												   std::min<uint8_t>(sizeof(uint64_t), (uint8_t)(capInst->size - x86.encoding.disp_offset)));
-
-			// it's relative, set immDest to max to trigger later check
-			copyDispSx(inst, offset, size, std::numeric_limits<int64_t>::max());
 			break;
 		} else if (op.type == X86_OP_IMM) {
 			// IMM types are like call 0xdeadbeef where they jmp straight to some location

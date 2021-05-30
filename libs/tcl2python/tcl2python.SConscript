@@ -1,26 +1,33 @@
-Import('*')
+Import('pyenv env static_cpptcl tclStubLib_obj')
 
-env = pyenv.Clone()
+env_tcl2python = pyenv.Clone()
+env_py3 = pyenv.Clone()
 
-pybind11_includes = Dir('#/libs/pybind11')
-
-py3_obj = env.Object(['py3.cpp',
+py3_obj = env_py3.Object(['py3.cpp',
                       'tcl_globals.cpp'])
+
+env_py3.AppendUnique(CPPPATH=env['pybind11_includes'])
+
+py3_static = env_py3.StaticLibrary('py3_static', source = py3_obj)
+
 sources = ['tclandpython.cpp',
            'module_native.cpp',
            'module_ctcl.cpp',
            'module_cpptcl.cpp',
            'module_tcl.cpp']
-tclpython_cpp = py3_obj + env.Object(sources)
+tclpython_obj = py3_obj + env_tcl2python.Object(sources)
 
-env.AppendUnique(CPPPATH=[cpptcl_includes, pybind11_includes],
-    LIBS = [static_cpptcl, tclStubLib_obj, 'ntdll']
+env_tcl2python.AppendUnique(CPPPATH= env['pybind11_includes'] + env['polyhook_includes'] + env['asmjit_includes'] + env['cpptcl_includes'],
+    # CPPDEFINES = {'ASMJIT_BUILD_X86' : ''},
+    LIBPATH = env['asmjit_lib_path'] ,
+    LIBS = [static_cpptcl, tclStubLib_obj, 'ntdll'] + env['polyhook'] + ['asmjit'] + ['capstone']
 )
 
-tclpython_dll = env.SharedLibrary('tclandpython',
-    source = tclpython_cpp,
+tclpython_dll = env_tcl2python.SharedLibrary('tclandpython',
+    source = tclpython_obj,
 )
 
-env.Install('#/bin', tclpython_dll)
+env_tcl2python.Install('#/bin', tclpython_dll)
 
-Return('tclpython_dll py3_obj pybind11_includes')
+Export('tclpython_obj')
+Return('tclpython_dll py3_static')

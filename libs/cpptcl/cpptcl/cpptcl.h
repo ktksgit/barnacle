@@ -334,91 +334,34 @@ template<typename Func>
 struct callbacka : public details::callback_base  {
 
 private:
-	Func f_;
+	Func _f;
 
-	using Traits = traits<Func>;
+	using Traits = FunctionTraits<Func>;
 	using R = typename Traits::return_type;
 
 	static constexpr std::size_t nargs = Traits::arity;
 
   public:
-	callbacka(Func f) : f_(f) {}
+	callbacka(Func f) : _f(f) {}
 
-	virtual void invoke(Tcl_Interp *interp, int objc, Tcl_Obj *const objv[] , policies const &pol) {
-		object variadic_arguments{};
-		if (!pol.variadic_)
-		{
-			details::check_params_no(objc, nargs, pol.usage_);
-		} else {
-			if constexpr (nargs > 0) {
-				// first element in objv[0] is procedure name
-				variadic_arguments = details::get_var_params(interp, objc, objv, nargs, pol);
-			}
-		}
-
-		if constexpr (nargs <= 0) {
-			details::dispatch<R>::do_dispatch(interp, f_);
-			return;
-		} else {
-			using T1 = typename Traits::template argument<0>::type;
-			details::tcl_cast_by_reference<T1> byRef1;
-
-			if constexpr (nargs <= 1) {
-				if (pol.variadic_)
-				{
-					details::dispatch<R>::template do_dispatch<object const &>(interp, f_,
-							variadic_arguments);
-				} else {
-					details::dispatch<R>::template do_dispatch<T1>(interp, f_,
-							details::tcl_cast<T1>::from(interp, objv[1], byRef1.value));
-				}
-				return;
-			} else {
-				using T2 = typename Traits::template argument<1>::type;
-				details::tcl_cast_by_reference<T2> byRef2;
-
-				if constexpr (nargs <= 2) {
-					if (pol.variadic_)
-					{
-						details::dispatch<R>::template do_dispatch<T1, object const &>(interp, f_,
-							details::tcl_cast<T1>::from(interp, objv[1], byRef1.value),
-							variadic_arguments
-						);
-					} else {
-						details::dispatch<R>::template do_dispatch<T1, T2>(interp, f_,
-							details::tcl_cast<T1>::from(interp, objv[1], byRef1.value),
-							details::tcl_cast<T2>::from(interp, objv[2], byRef2.value)
-						);
-					}
-					return;
-				} else {
-					using T3 = typename Traits::template argument<2>::type;
-					details::tcl_cast_by_reference<T3> byRef3;
-
-					if constexpr (nargs <= 3) {
-						if (pol.variadic_) {
-							details::dispatch<R>::template do_dispatch<T1, T2, object const&>(interp, f_,
-									details::tcl_cast<T1>::from(interp, objv[1], byRef1.value),
-									details::tcl_cast<T2>::from(interp, objv[2], byRef2.value),
-									variadic_arguments
-							);
-						}
-						else
-						{
-							details::dispatch<R>::template do_dispatch<T1, T2, T3>(interp, f_,
-								details::tcl_cast<T1>::from(interp, objv[1], byRef1.value),
-								details::tcl_cast<T2>::from(interp, objv[2], byRef2.value),
-								details::tcl_cast<T3>::from(interp, objv[3], byRef3.value)
-								);
-						}
-						return;
-					} else {
-						static_assert(nargs > 3, "Argument count exceed implemented count");
-					}
-				}
-			}
-		}
-	}
+    virtual void invoke(Tcl_Interp *interp, int objc, Tcl_Obj *const objv[], policies const &pol)
+    {
+        if (pol.variadic_)
+        {
+            object variadic_arguments{};
+            if constexpr (nargs > 0)
+            {
+                // first element in objv[0] is procedure name
+                variadic_arguments = details::get_var_params(interp, objc, objv, nargs, pol);
+            }
+            details::nextgen::Dispatcher<nargs - 1, Traits, object const &>::dispatch(interp, objv, _f, variadic_arguments);
+        }
+        else
+        {
+            details::check_params_no(objc, nargs, pol.usage_);
+            details::nextgen::Dispatcher<nargs, Traits>::dispatch(interp, objv, _f);
+        }
+    }
 };
 
 
@@ -449,31 +392,9 @@ class interpreter {
 	Tcl_Interp *get() const { return interp_; }
 
     template <typename Func>
-    void def2(std::string const &name, Func f, policies const &p = policies()) {
-    	add_function(name, std::shared_ptr<details::callback_base>(new callbacka<Func>(f)), p);
+    void def(std::string const &name, Func f, policies const &p = policies()) {
+        add_function(name, std::shared_ptr<details::callback_base>(new callbacka<Func>(f)), p);
     }
-
-	// free function definitions
-
-	template <typename R> void def(std::string const &name, R (*f)(), policies const &p = policies()) { add_function(name, std::shared_ptr<details::callback_base>(new details::callback0<R>(f)), p); }
-
-	template <typename R, typename T1> void def(std::string const &name, R (*f)(T1), policies const &p = policies()) { add_function(name, std::shared_ptr<details::callback_base>(new details::callback1<R, T1>(f)), p); }
-
-	template <typename R, typename T1, typename T2> void def(std::string const &name, R (*f)(T1, T2), policies const &p = policies()) { add_function(name, std::shared_ptr<details::callback_base>(new details::callback2<R, T1, T2>(f)), p); }
-
-	template <typename R, typename T1, typename T2, typename T3> void def(std::string const &name, R (*f)(T1, T2, T3), policies const &p = policies()) { add_function(name, std::shared_ptr<details::callback_base>(new details::callback3<R, T1, T2, T3>(f)), p); }
-
-	template <typename R, typename T1, typename T2, typename T3, typename T4> void def(std::string const &name, R (*f)(T1, T2, T3, T4), policies const &p = policies()) { add_function(name, std::shared_ptr<details::callback_base>(new details::callback4<R, T1, T2, T3, T4>(f)), p); }
-
-	template <typename R, typename T1, typename T2, typename T3, typename T4, typename T5> void def(std::string const &name, R (*f)(T1, T2, T3, T4, T5), policies const &p = policies()) { add_function(name, std::shared_ptr<details::callback_base>(new details::callback5<R, T1, T2, T3, T4, T5>(f)), p); }
-
-	template <typename R, typename T1, typename T2, typename T3, typename T4, typename T5, typename T6> void def(std::string const &name, R (*f)(T1, T2, T3, T4, T5, T6), policies const &p = policies()) { add_function(name, std::shared_ptr<details::callback_base>(new details::callback6<R, T1, T2, T3, T4, T5, T6>(f)), p); }
-
-	template <typename R, typename T1, typename T2, typename T3, typename T4, typename T5, typename T6, typename T7> void def(std::string const &name, R (*f)(T1, T2, T3, T4, T5, T6, T7), policies const &p = policies()) { add_function(name, std::shared_ptr<details::callback_base>(new details::callback7<R, T1, T2, T3, T4, T5, T6, T7>(f)), p); }
-
-	template <typename R, typename T1, typename T2, typename T3, typename T4, typename T5, typename T6, typename T7, typename T8> void def(std::string const &name, R (*f)(T1, T2, T3, T4, T5, T6, T7, T8), policies const &p = policies()) { add_function(name, std::shared_ptr<details::callback_base>(new details::callback8<R, T1, T2, T3, T4, T5, T6, T7, T8>(f)), p); }
-
-	template <typename R, typename T1, typename T2, typename T3, typename T4, typename T5, typename T6, typename T7, typename T8, typename T9> void def(std::string const &name, R (*f)(T1, T2, T3, T4, T5, T6, T7, T8, T9), policies const &p = policies()) { add_function(name, std::shared_ptr<details::callback_base>(new details::callback9<R, T1, T2, T3, T4, T5, T6, T7, T8, T9>(f)), p); }
 
 	// class definitions
 
@@ -521,6 +442,8 @@ class interpreter {
 	details::result getVar(std::string const &arrayTclVariable, std::string const &arrayIndex);
 
 	details::result setVar(std::string const &variableName, object const &scalarTclVariable, int flags = TCL_LEAVE_ERR_MSG);
+
+    void setResult(object const &o);
 
     // check if variables exist
     bool exists(std::string const &scalarTclVariable);
@@ -589,9 +512,15 @@ using details::result;
 // macro for defining loadable module entry point
 // - used for extending Tcl interpreter
 
+#ifdef _MSC_VER
+#define CPPTCL_EXPORT __declspec( dllexport )
+#else
+#define CPPTCL_EXPORT __attribute__((dllexport))
+#endif
+
 #define CPPTCL_MODULE(name, i)                       \
 	void name##_cpptcl_Init(Tcl::interpreter &i);    \
-	extern "C" __attribute__((dllexport)) int name##_Init(Tcl_Interp *interpreter) { \
+	extern "C" CPPTCL_EXPORT int name##_Init(Tcl_Interp *interpreter) { \
 		Tcl_InitStubs(interpreter, const_cast<char*>("8.3"), 0);             \
 		Tcl::interpreter i(interpreter, false);           \
 		name##_cpptcl_Init(i);                       \

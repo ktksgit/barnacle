@@ -8,6 +8,11 @@ class TclPythonGlobals::Implementation
     std::unordered_map<Tcl_Interp*, pybind11::object> _py_globals_per_interpreter;
 
 public:
+    ~Implementation() {
+        py::gil_scoped_acquire gil{};
+        _py_globals_per_interpreter.clear();
+    }
+
     void push(Tcl_Interp * interp)
     {
         _tcl_interpreter.push(interp);
@@ -15,6 +20,9 @@ public:
 
     Tcl_Interp *top()
     {
+        if (_tcl_interpreter.empty()) {
+            throw std::runtime_error("Stack of tcl interpreters is empty while accessing it");
+        }
         return _tcl_interpreter.top();
     }
 
@@ -38,7 +46,22 @@ public:
         _py_globals_per_interpreter.insert({interp, new_global});
         return new_global;
     }
+
+    bool tryClear() {
+        if (_py_globals_per_interpreter.size() == 0) {
+            return true;
+        }
+        else {
+            return false;
+        }
+    }
 };
+
+TclPythonGlobals& TclPythonGlobals::getInstance()
+{
+    static TclPythonGlobals instance;
+    return instance;
+}
 
 TclPythonGlobals::TclPythonGlobals() :
     _p(std::make_unique<Implementation>())

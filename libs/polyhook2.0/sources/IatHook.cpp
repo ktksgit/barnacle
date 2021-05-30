@@ -10,6 +10,7 @@ PLH::IatHook::IatHook(const std::string& dllName, const std::string& apiName, co
     , m_moduleName(moduleName)
     , m_fnCallback(fnCallback)
     , m_userOrigVar(userOrigVar)
+	, m_origFunc(0)
 {}
 
 bool PLH::IatHook::hook() {
@@ -19,7 +20,7 @@ bool PLH::IatHook::hook() {
 		return false;
 
 	// IAT is by default a writeable section
-	MemoryProtector prot((uint64_t)&pThunk->u1.Function, sizeof(uintptr_t), ProtFlag::R | ProtFlag::W);
+	MemoryProtector prot((uint64_t)&pThunk->u1.Function, sizeof(uintptr_t), ProtFlag::R | ProtFlag::W, *this);
 	m_origFunc = (uint64_t)pThunk->u1.Function;
 	pThunk->u1.Function = (uintptr_t)m_fnCallback;
 	m_hooked = true;
@@ -37,7 +38,7 @@ bool PLH::IatHook::unHook() {
 	if (pThunk == nullptr)
 		return false;
 
-	MemoryProtector prot((uint64_t)&pThunk->u1.Function, sizeof(uintptr_t), ProtFlag::R | ProtFlag::W);
+	MemoryProtector prot((uint64_t)&pThunk->u1.Function, sizeof(uintptr_t), ProtFlag::R | ProtFlag::W, *this);
 	pThunk->u1.Function = (uintptr_t)m_origFunc;
 	m_hooked = false;
 	*m_userOrigVar = NULL;
@@ -72,7 +73,7 @@ IMAGE_THUNK_DATA* PLH::IatHook::FindIatThunk(const std::string& dllName, const s
 	}
 
 	if (pThunk == nullptr) {
-		ErrorLog::singleton().push("Failed to find thunk for api from requested dll", ErrorLevel::SEV);
+		Log::log("Failed to find thunk for api from requested dll", ErrorLevel::SEV);
 	}
 	return pThunk;
 }
@@ -87,7 +88,7 @@ IMAGE_THUNK_DATA* PLH::IatHook::FindIatThunkInModule(void* moduleBase, const std
 	auto* pDataDir = (IMAGE_DATA_DIRECTORY*)pNT->OptionalHeader.DataDirectory;
 
 	if (pDataDir[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress == NULL) {
-		ErrorLog::singleton().push("PEs without import tables are unsupported", ErrorLevel::SEV);
+		Log::log("PEs without import tables are unsupported", ErrorLevel::SEV);
 		return nullptr;
 	}
 
@@ -108,7 +109,7 @@ IMAGE_THUNK_DATA* PLH::IatHook::FindIatThunkInModule(void* moduleBase, const std
 			RVA2VA(uintptr_t, moduleBase, pImports[i].FirstThunk);
 
 		if (!pOriginalThunk) {
-			ErrorLog::singleton().push("IAT's without valid original thunk are un-supported", ErrorLevel::SEV);
+			Log::log("IAT's without valid original thunk are un-supported", ErrorLevel::SEV);
 			return nullptr;
 		}
 
@@ -129,6 +130,6 @@ IMAGE_THUNK_DATA* PLH::IatHook::FindIatThunkInModule(void* moduleBase, const std
 		}
 	}
 
-	ErrorLog::singleton().push("Thunk not found before end of IAT", ErrorLevel::SEV);
+	Log::log("Thunk not found before end of IAT", ErrorLevel::SEV);
 	return nullptr;
 }

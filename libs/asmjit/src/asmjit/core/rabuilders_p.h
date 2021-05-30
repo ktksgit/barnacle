@@ -27,6 +27,7 @@
 #include "../core/api-config.h"
 #ifndef ASMJIT_NO_COMPILER
 
+#include "../core/formatter.h"
 #include "../core/rapass_p.h"
 
 ASMJIT_BEGIN_NAMESPACE
@@ -36,29 +37,28 @@ ASMJIT_BEGIN_NAMESPACE
 //! \{
 
 // ============================================================================
-// [asmjit::RACFGBuilder]
+// [asmjit::RACFGBuilderT]
 // ============================================================================
 
 template<typename This>
-class RACFGBuilder {
+class RACFGBuilderT {
 public:
-  RAPass* _pass;
-  BaseCompiler* _cc;
-
-  RABlock* _curBlock;
-  RABlock* _retBlock;
-  FuncNode* _funcNode;
-  RARegsStats _blockRegStats;
-  uint32_t _exitLabelId;
-  ZoneVector<uint32_t> _sharedAssignmentsMap;
+  BaseRAPass* _pass = nullptr;
+  BaseCompiler* _cc = nullptr;
+  RABlock* _curBlock = nullptr;
+  RABlock* _retBlock = nullptr;
+  FuncNode* _funcNode = nullptr;
+  RARegsStats _blockRegStats {};
+  uint32_t _exitLabelId = Globals::kInvalidId;
+  ZoneVector<uint32_t> _sharedAssignmentsMap {};
 
   // Only used by logging, it's fine to be here to prevent more #ifdefs...
-  bool _hasCode;
-  RABlock* _lastLoggedBlock;
+  bool _hasCode = false;
+  RABlock* _lastLoggedBlock = nullptr;
 
 #ifndef ASMJIT_NO_LOGGING
-  Logger* _logger;
-  uint32_t _logFlags;
+  Logger* _logger = nullptr;
+  uint32_t _logFlags = FormatOptions::kFlagPositions;
   StringTmp<512> _sb;
 #endif
 
@@ -66,25 +66,16 @@ public:
   static constexpr uint32_t kCodeIndentation = 4;
 
   // NOTE: This is a bit hacky. There are some nodes which are processed twice
-  // (see `onBeforeCall()` and `onBeforeRet()`) as they can insert some nodes
+  // (see `onBeforeInvoke()` and `onBeforeRet()`) as they can insert some nodes
   // around them. Since we don't have any flags to mark these we just use their
   // position that is [at that time] unassigned.
   static constexpr uint32_t kNodePositionDidOnBefore = 0xFFFFFFFFu;
 
-  inline RACFGBuilder(RAPass* pass) noexcept
+  inline RACFGBuilderT(BaseRAPass* pass) noexcept
     : _pass(pass),
-      _cc(pass->cc()),
-      _curBlock(nullptr),
-      _retBlock(nullptr),
-      _funcNode(nullptr),
-      _blockRegStats{},
-      _exitLabelId(Globals::kInvalidId),
-      _hasCode(false),
-      _lastLoggedBlock(nullptr) {
+      _cc(pass->cc()) {
 #ifndef ASMJIT_NO_LOGGING
     _logger = _pass->debugLogger();
-    _logFlags = FormatOptions::kFlagPositions;
-
     if (_logger)
       _logFlags |= _logger->flags();
 #endif
@@ -122,7 +113,7 @@ public:
         // Instruction | Jump | Invoke | Return
         // ------------------------------------
 
-        // Handle `InstNode`, `FuncCallNode`, and `FuncRetNode`. All of them
+        // Handle `InstNode`, `InvokeNode`, and `FuncRetNode`. All of them
         // share the same interface that provides operands that have read/write
         // semantics.
         if (ASMJIT_UNLIKELY(!_curBlock)) {
@@ -135,18 +126,18 @@ public:
 
         _hasCode = true;
 
-        if (node->isFuncCall() || node->isFuncRet()) {
+        if (node->isInvoke() || node->isFuncRet()) {
           if (node->position() != kNodePositionDidOnBefore) {
             // Call and Reg are complicated as they may insert some surrounding
             // code around them. The simplest approach is to get the previous
             // node, call the `onBefore()` handlers and then check whether
             // anything changed and restart if so. By restart we mean that the
             // current `node` would go back to the first possible inserted node
-            // by `onBeforeCall()` or `onBeforeRet()`.
+            // by `onBeforeInvoke()` or `onBeforeRet()`.
             BaseNode* prev = node->prev();
 
-            if (node->type() == BaseNode::kNodeFuncCall)
-              ASMJIT_PROPAGATE(static_cast<This*>(this)->onBeforeCall(node->as<FuncCallNode>()));
+            if (node->type() == BaseNode::kNodeInvoke)
+              ASMJIT_PROPAGATE(static_cast<This*>(this)->onBeforeInvoke(node->as<InvokeNode>()));
             else
               ASMJIT_PROPAGATE(static_cast<This*>(this)->onBeforeRet(node->as<FuncRetNode>()));
 
@@ -159,7 +150,7 @@ public:
               node->setPosition(kNodePositionDidOnBefore);
               node = prev->next();
 
-              // `onBeforeCall()` and `onBeforeRet()` can only insert instructions.
+              // `onBeforeInvoke()` and `onBeforeRet()` can only insert instructions.
               ASMJIT_ASSERT(node->isInst());
             }
 
@@ -179,8 +170,8 @@ public:
         ib.reset();
         ASMJIT_PROPAGATE(static_cast<This*>(this)->onInst(inst, controlType, ib));
 
-        if (node->isFuncCall()) {
-          ASMJIT_PROPAGATE(static_cast<This*>(this)->onCall(inst->as<FuncCallNode>(), ib));
+        if (node->isInvoke()) {
+          ASMJIT_PROPAGATE(static_cast<This*>(this)->onInvoke(inst->as<InvokeNode>(), ib));
         }
 
         if (node->isFuncRet()) {
@@ -231,14 +222,17 @@ public:
                 if (ASMJIT_UNLIKELY(!targetBlock))
                   return DebugUtils::errored(kErrorOutOfMemory);
 
+                targetBlock->makeTargetable();
                 ASMJIT_PROPAGATE(_curBlock->appendSuccessor(targetBlock));
               }
               else {
                 // Not a label - could be jump with reg/mem operand, which
                 // means that it can go anywhere. Such jumps must either be
                 // annotated so the CFG can be properly constructed, otherwise
-                // we assume the worst case - can jump to every basic block.
+                // we assume the worst case - can jump to any basic block.
                 JumpAnnotation* jumpAnnotation = nullptr;
+                _curBlock->addFlags(RABlock::kFlagHasJumpTable);
+
                 if (inst->type() == BaseNode::kNodeJump)
                   jumpAnnotation = inst->as<JumpNode>()->annotation();
 
@@ -255,6 +249,7 @@ public:
                     // Prevents adding basic-block successors multiple times.
                     if (!targetBlock->hasTimestamp(timestamp)) {
                       targetBlock->setTimestamp(timestamp);
+                      targetBlock->makeTargetable();
                       ASMJIT_PROPAGATE(_curBlock->appendSuccessor(targetBlock));
                     }
                   }
@@ -330,7 +325,7 @@ public:
         if (!_curBlock) {
           // If the current code is unreachable the label makes it reachable
           // again. We may remove the whole block in the future if it's not
-          // referenced.
+          // referenced though.
           _curBlock = node->passData<RABlock>();
 
           if (_curBlock) {
@@ -340,13 +335,14 @@ public:
               break;
           }
           else {
-            // No block assigned, to create a new one, and assign it.
+            // No block assigned - create a new one and assign it.
             _curBlock = _pass->newBlock(node);
             if (ASMJIT_UNLIKELY(!_curBlock))
               return DebugUtils::errored(kErrorOutOfMemory);
             node->setPassData<RABlock>(_curBlock);
           }
 
+          _curBlock->makeTargetable();
           _hasCode = false;
           _blockRegStats.reset();
           ASMJIT_PROPAGATE(_pass->addBlock(_curBlock));
@@ -354,10 +350,13 @@ public:
         else {
           if (node->hasPassData()) {
             RABlock* consecutive = node->passData<RABlock>();
+            consecutive->makeTargetable();
+
             if (_curBlock == consecutive) {
               // The label currently processed is part of the current block. This
               // is only possible for multiple labels that are right next to each
-              // other, or are separated by non-code nodes like directives and comments.
+              // other or labels that are separated by non-code nodes like directives
+              // and comments.
               if (ASMJIT_UNLIKELY(_hasCode))
                 return DebugUtils::errored(kErrorInvalidState);
             }
@@ -391,6 +390,7 @@ public:
               RABlock* consecutive = _pass->newBlock(node);
               if (ASMJIT_UNLIKELY(!consecutive))
                 return DebugUtils::errored(kErrorOutOfMemory);
+              consecutive->makeTargetable();
 
               ASMJIT_PROPAGATE(_curBlock->appendSuccessor(consecutive));
               ASMJIT_PROPAGATE(_pass->addBlock(consecutive));
@@ -409,7 +409,7 @@ public:
         logNode(node, kRootIndentation);
 
         // Unlikely: Assume that the exit label is reached only once per function.
-        if (ASMJIT_UNLIKELY(node->as<LabelNode>()->id() == _exitLabelId)) {
+        if (ASMJIT_UNLIKELY(node->as<LabelNode>()->labelId() == _exitLabelId)) {
           _curBlock->setLast(node);
           _curBlock->makeConstructed(_blockRegStats);
           ASMJIT_PROPAGATE(_pass->addExitBlock(_curBlock));
@@ -478,6 +478,8 @@ public:
 
     if (ASMJIT_UNLIKELY(!_retBlock))
       return DebugUtils::errored(kErrorOutOfMemory);
+
+    _retBlock->makeTargetable();
     ASMJIT_PROPAGATE(_pass->addExitBlock(_retBlock));
 
     if (node != func) {
@@ -492,7 +494,7 @@ public:
 
     // Reset everything we may need.
     _blockRegStats.reset();
-    _exitLabelId = func->exitNode()->id();
+    _exitLabelId = func->exitNode()->labelId();
 
     // Initially we assume there is no code in the function body.
     _hasCode = false;
@@ -520,13 +522,13 @@ public:
     size_t blockCount = blocks.size();
 
     // NOTE: Iterate from `1` as the first block is the entry block, we don't
-    // allow the entry to be a successor of block that ends with unknown jump.
+    // allow the entry to be a successor of any block.
     RABlock* consecutive = block->consecutive();
     for (size_t i = 1; i < blockCount; i++) {
-      RABlock* successor = blocks[i];
-      if (successor == consecutive)
+      RABlock* candidate = blocks[i];
+      if (candidate == consecutive || !candidate->isTargetable())
         continue;
-      block->appendSuccessor(successor);
+      block->appendSuccessor(candidate);
     }
 
     return shareAssignmentAcrossSuccessors(block);
@@ -599,11 +601,11 @@ public:
     _sb.clear();
     _sb.appendChars(' ', indentation);
     if (action) {
-      _sb.appendString(action);
-      _sb.appendChar(' ');
+      _sb.append(action);
+      _sb.append(' ');
     }
-    Logging::formatNode(_sb, _logFlags, cc(), node);
-    _sb.appendChar('\n');
+    Formatter::formatNode(_sb, _logFlags, cc(), node);
+    _sb.append('\n');
     _logger->log(_sb);
   }
 #else

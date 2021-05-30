@@ -46,7 +46,9 @@ Builder::~Builder() noexcept {}
 Error Builder::finalize() {
   ASMJIT_PROPAGATE(runPasses());
   Assembler a(_code);
-  return serialize(&a);
+  a.addEncodingOptions(encodingOptions());
+  a.addValidationOptions(validationOptions());
+  return serializeTo(&a);
 }
 
 // ============================================================================
@@ -54,14 +56,11 @@ Error Builder::finalize() {
 // ============================================================================
 
 Error Builder::onAttach(CodeHolder* code) noexcept {
-  uint32_t archId = code->archId();
-  if (!ArchInfo::isX86Family(archId))
+  uint32_t arch = code->arch();
+  if (!Environment::isFamilyX86(arch))
     return DebugUtils::errored(kErrorInvalidArch);
 
-  ASMJIT_PROPAGATE(Base::onAttach(code));
-
-  _gpRegInfo.setSignature(archId == ArchInfo::kIdX86 ? uint32_t(Gpd::kSignature) : uint32_t(Gpq::kSignature));
-  return kErrorOk;
+  return Base::onAttach(code);
 }
 
 ASMJIT_END_SUB_NAMESPACE

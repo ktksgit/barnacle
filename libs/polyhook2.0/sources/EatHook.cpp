@@ -13,14 +13,6 @@ PLH::EatHook::EatHook(const std::string& apiName, const std::wstring& moduleName
 	, m_trampoline(0)
 {}
 
-PLH::EatHook::~EatHook() {
-	// trampoline freed by pageallocator dtor
-	if (m_allocator != nullptr) {
-		delete m_allocator;
-		m_allocator = nullptr;
-	}
-}
-
 bool PLH::EatHook::hook() {
 	assert(m_userOrigVar != nullptr);
 	uint32_t* pExport = FindEatFunction(m_apiName, m_moduleName);
@@ -36,19 +28,19 @@ bool PLH::EatHook::hook() {
 		m_allocator = new PageAllocator(m_moduleBase, 0x80000000);
 		m_trampoline = m_allocator->getBlock(m_trampolineSize);
 		if (m_trampoline == 0) {
-			ErrorLog::singleton().push("EAT hook offset is > 32bit's. Allocation of trampoline necessary and failed to find free page within range", ErrorLevel::INFO);
+			Log::log("EAT hook offset is > 32bit's. Allocation of trampoline necessary and failed to find free page within range", ErrorLevel::INFO);
 			return false;
 		}
 
-		PLH::ADisassembler::writeEncoding(makeAgnosticJmp(m_trampoline, m_fnCallback));
+		PLH::ADisassembler::writeEncoding(makeAgnosticJmp(m_trampoline, m_fnCallback), *this);
 		offset = m_trampoline - m_moduleBase;
 
-		ErrorLog::singleton().push("EAT hook offset is > 32bit's. Allocation of trampoline necessary", ErrorLevel::INFO);
+		Log::log("EAT hook offset is > 32bit's. Allocation of trampoline necessary", ErrorLevel::INFO);
 	}
 
 	// Just like IAT, EAT is by default a writeable section
 	// any EAT entry must be an offset
-	MemoryProtector prot((uint64_t)pExport, sizeof(uintptr_t), ProtFlag::R | ProtFlag::W);
+	MemoryProtector prot((uint64_t)pExport, sizeof(uintptr_t), ProtFlag::R | ProtFlag::W, *this);
 	m_origFunc = *pExport; // original offset
 	*pExport = (uint32_t)offset;
 	m_hooked = true;
@@ -59,14 +51,16 @@ bool PLH::EatHook::hook() {
 bool PLH::EatHook::unHook() {
 	assert(m_userOrigVar != nullptr);
 	assert(m_hooked);
-	if (!m_hooked)
+	if (!m_hooked) {
+		Log::log("EatHook unhook failed: no hook present", ErrorLevel::SEV);
 		return false;
+	}
 
 	uint32_t* pExport = FindEatFunction(m_apiName, m_moduleName);
 	if (pExport == nullptr)
 		return false;
 
-	MemoryProtector prot((uint64_t)pExport, sizeof(uintptr_t), ProtFlag::R | ProtFlag::W);
+	MemoryProtector prot((uint64_t)pExport, sizeof(uintptr_t), ProtFlag::R | ProtFlag::W, *this);
 	*pExport = (uint32_t)m_origFunc;
 	m_hooked = false;
 	*m_userOrigVar = NULL;
@@ -103,7 +97,7 @@ uint32_t* PLH::EatHook::FindEatFunction(const std::string& apiName, const std::w
 	}
 
 	if (pExportAddress == nullptr) {
-		ErrorLog::singleton().push("Failed to find export address from requested dll", ErrorLevel::SEV);
+		Log::log("Failed to find export address from requested dll", ErrorLevel::SEV);
 	}
 	return pExportAddress;
 }
@@ -118,7 +112,7 @@ uint32_t* PLH::EatHook::FindEatFunctionInModule(const std::string& apiName) {
 	auto* pDataDir = (IMAGE_DATA_DIRECTORY*)pNT->OptionalHeader.DataDirectory;
 
 	if (pDataDir[IMAGE_DIRECTORY_ENTRY_EXPORT].VirtualAddress == NULL) {
-		ErrorLog::singleton().push("PEs without export tables are unsupported", ErrorLevel::SEV);
+		Log::log("PEs without export tables are unsupported", ErrorLevel::SEV);
 		return NULL;
 	}
 
@@ -141,6 +135,6 @@ uint32_t* PLH::EatHook::FindEatFunctionInModule(const std::string& apiName) {
 		return pExportAddress;
 	}
 
-	ErrorLog::singleton().push("API not found before end of EAT", ErrorLevel::SEV);
+	Log::log("API not found before end of EAT", ErrorLevel::SEV);
 	return nullptr;
 }

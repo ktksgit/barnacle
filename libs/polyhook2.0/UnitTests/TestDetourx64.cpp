@@ -6,6 +6,7 @@
 #include "polyhook2/CapstoneDisassembler.hpp"
 #include "polyhook2/ZydisDisassembler.hpp"
 
+#include "polyhook2/Tests/StackCanary.hpp"
 #include "polyhook2/Tests/TestEffectTracker.hpp"
 
 EffectTracker effects;
@@ -17,6 +18,7 @@ printf inside the body can mitigate this significantly. Do serious checking in d
 or releasewithdebinfo mode (relwithdebinfo optimizes sliiiightly less)**/
 
 NOINLINE void hookMe1() {
+	PLH::StackCanary canary;
 	volatile int var = 1;
 	volatile int var2 = 0;
 	var2 += 3;
@@ -28,25 +30,26 @@ NOINLINE void hookMe1() {
 	REQUIRE(var2 == 40);
 }
 uint64_t hookMe1Tramp = NULL;
-
-NOINLINE void h_hookMe1() {
+HOOK_CALLBACK(&hookMe1, h_hookMe1, {
+	PLH::StackCanary canary;
 	std::cout << "Hook 1 Called!" << std::endl;
 	effects.PeakEffect().trigger();
 	return PLH::FnCast(hookMe1Tramp, &hookMe1)();
-}
+});
 
 NOINLINE void hookMe2() {
+	PLH::StackCanary canary;
 	for (int i = 0; i < 10; i++) {
 		printf("%d\n", i);
 	}
 }
 uint64_t hookMe2Tramp = NULL;
-
-NOINLINE void h_hookMe2() {
+HOOK_CALLBACK(&hookMe2, h_hookMe2, {
+	PLH::StackCanary canary;
 	std::cout << "Hook 2 Called!" << std::endl;
 	effects.PeakEffect().trigger();
 	return PLH::FnCast(hookMe2Tramp, &hookMe2)();
-}
+});
 
 unsigned char hookMe3[] = {
 0x57, // push rdi 
@@ -70,25 +73,37 @@ unsigned char hookMe4[] = {
 
 uint64_t nullTramp = NULL;
 NOINLINE void h_nullstub() {
+	PLH::StackCanary canary;
 	volatile int i = 0;
 	PH_UNUSED(i);
 }
 
 #include <stdlib.h>
 uint64_t hookMallocTramp = NULL;
-NOINLINE void* h_hookMalloc(size_t size) {
+HOOK_CALLBACK(&malloc, h_hookMalloc, {
+	PLH::StackCanary canary;
 	volatile int i = 0;
 	PH_UNUSED(i);
 	effects.PeakEffect().trigger();
 
-	return PLH::FnCast(hookMallocTramp, &malloc)(size);
-}
+	return PLH::FnCast(hookMallocTramp, &malloc)(_args...);
+});
+
+uint64_t oCreateMutexExA = 0;
+HOOK_CALLBACK(&CreateMutexExA, hCreateMutexExA, {
+	PLH::StackCanary canary;
+	LPCSTR lpName = GET_ARG(1);
+	printf("kernel32!CreateMutexExA  Name:%s",  lpName);
+	return PLH::FnCast(oCreateMutexExA, &CreateMutexExA)(_args...);
+});
 
 TEMPLATE_TEST_CASE("Testing 64 detours", "[x64Detour],[ADetour]", PLH::CapstoneDisassembler, PLH::ZydisDisassembler) {
 	TestType dis(PLH::Mode::x64);
 
+
 	SECTION("Normal function") {
-		PLH::x64Detour detour((char*)&hookMe1, (char*)&h_hookMe1, &hookMe1Tramp, dis);
+		PLH::StackCanary canary;
+		PLH::x64Detour detour((char*)&hookMe1, (char*)h_hookMe1, &hookMe1Tramp, dis);
 		REQUIRE(detour.hook() == true);
 
 		effects.PushEffect();
@@ -97,8 +112,40 @@ TEMPLATE_TEST_CASE("Testing 64 detours", "[x64Detour],[ADetour]", PLH::CapstoneD
 		REQUIRE(detour.unHook() == true);
 	}
 
+	SECTION("Normal function rehook")
+	{
+		PLH::StackCanary canary;
+		PLH::x64Detour detour((char*)&hookMe1, (char*)h_hookMe1, &hookMe1Tramp, dis);
+		REQUIRE(detour.hook() == true);
+		
+		effects.PushEffect();
+		REQUIRE(detour.reHook() == true); // can only really test this doesn't cause memory corruption easily
+		hookMe1();
+		REQUIRE(effects.PopEffect().didExecute());
+		REQUIRE(detour.unHook() == true);
+	}
+
+	// In release mode win apis usually go through two levels of jmps 
+	/*
+	0xe9 ... jmp iat_thunk
+
+	iat_thunk:
+	0xff 25 ... jmp [api_implementation]
+
+	api_implementation:
+	    sub rsp, ...
+		... the goods ...
+	*/
+	SECTION("WinApi Indirection") {
+		PLH::StackCanary canary;
+		PLH::x64Detour detour((char*)&CreateMutexExA, (char*)hCreateMutexExA, &oCreateMutexExA, dis);
+		REQUIRE(detour.hook() == true);
+		REQUIRE(detour.unHook() == true);
+	}
+
 	SECTION("Loop function") {
-		PLH::x64Detour detour((char*)&hookMe2, (char*)&h_hookMe2, &hookMe2Tramp, dis);
+		PLH::StackCanary canary;
+		PLH::x64Detour detour((char*)&hookMe2, (char*)h_hookMe2, &hookMe2Tramp, dis);
 		REQUIRE(detour.hook() == true);
 
 		effects.PushEffect();
@@ -108,19 +155,23 @@ TEMPLATE_TEST_CASE("Testing 64 detours", "[x64Detour],[ADetour]", PLH::CapstoneD
 	}
 
 	SECTION("Jmp into prol w/src in range") {
+		PLH::StackCanary canary;
 		PLH::x64Detour detour((char*)&hookMe3, (char*)&h_nullstub, &nullTramp, dis);
 		REQUIRE(detour.hook() == true);
 		REQUIRE(detour.unHook() == true);
 	}
 
 	SECTION("Jmp into prol w/src out of range") {
+		PLH::StackCanary canary;
 		PLH::x64Detour detour((char*)&hookMe4, (char*)&h_nullstub, &nullTramp, dis);
+
 		REQUIRE(detour.hook() == true);
 		REQUIRE(detour.unHook() == true);
 	}
 
 	SECTION("hook malloc") {
-		PLH::x64Detour detour((char*)&malloc, (char*)&h_hookMalloc, &hookMallocTramp, dis);
+		PLH::StackCanary canary;
+		PLH::x64Detour detour((char*)&malloc, (char*)h_hookMalloc, &hookMallocTramp, dis);
 		effects.PushEffect(); // catch does some allocations, push effect first so peak works
 		bool result = detour.hook();
 

@@ -7,13 +7,13 @@ PLH::ZydisDisassembler::ZydisDisassembler(PLH::Mode mode) : ADisassembler(mode),
 		(mode == PLH::Mode::x64) ? ZYDIS_MACHINE_MODE_LONG_64 : ZYDIS_MACHINE_MODE_LONG_COMPAT_32,
 		(mode == PLH::Mode::x64) ? ZYDIS_ADDRESS_WIDTH_64 : ZYDIS_ADDRESS_WIDTH_32)))
 	{
-		ErrorLog::singleton().push("Failed to initialize zydis decoder", ErrorLevel::SEV);
+		Log::log("Failed to initialize zydis decoder", ErrorLevel::SEV);
 		return;
 	}
 
 	if (ZYAN_FAILED(ZydisFormatterInit(m_formatter, ZYDIS_FORMATTER_STYLE_INTEL)))
 	{
-		ErrorLog::singleton().push("Failed to initialize zydis formatter", ErrorLevel::SEV);
+		Log::log("Failed to initialize zydis formatter", ErrorLevel::SEV);
 		return;
 	}
 
@@ -27,13 +27,24 @@ PLH::ZydisDisassembler::~ZydisDisassembler() {
 }
 
 PLH::insts_t
-PLH::ZydisDisassembler::disassemble(uint64_t firstInstruction, uint64_t start, uint64_t End) {
+PLH::ZydisDisassembler::disassemble(uint64_t firstInstruction, uint64_t start, uint64_t End, const MemAccessor& accessor) {
 	insts_t insVec;
 	m_branchMap.clear();
 
+	uint64_t size = End - start;
+	assert(size > 0);
+	if (size <= 0) {
+		return insVec;
+	}
+
+	// copy potentially remote memory to local buffer
+	uint8_t* buf = new uint8_t[(uint32_t)size];
+	accessor.mem_copy((uint64_t)buf, firstInstruction, size);
+
 	ZydisDecodedInstruction insInfo;
 	uint64_t offset = 0;
-	while(ZYAN_SUCCESS(ZydisDecoderDecodeBuffer(m_decoder, (char*)(firstInstruction + offset), (ZyanUSize)(End - start - offset), &insInfo)))
+	bool endHit = false;
+	while(ZYAN_SUCCESS(ZydisDecoderDecodeBuffer(m_decoder, (char*)(buf + offset), (ZyanUSize)(size - offset), &insInfo)))
 	{
 		Instruction::Displacement displacement = {};
 		displacement.Absolute = 0;
@@ -48,20 +59,27 @@ PLH::ZydisDisassembler::disassemble(uint64_t firstInstruction, uint64_t start, u
 						 displacement,
 						 0,
 						 false,
-						 (uint8_t*)((unsigned char*)firstInstruction + offset),
+			             false,
+						 (uint8_t*)((unsigned char*)buf + offset),
 						 insInfo.length,
 						 ZydisMnemonicGetString(insInfo.mnemonic),
 						 opstr,
 						 m_mode);
 
 		setDisplacementFields(inst, &insInfo);
+		if (endHit && !isPadBytes(inst))
+			break;
+
 		insVec.push_back(inst);
 
 		// searches instruction vector and updates references
 		addToBranchMap(insVec, inst);
+		if (isFuncEnd(inst))
+			endHit = true;
 
 		offset += insInfo.length;
 	}
+	delete[] buf;
 	return insVec;
 }
 
@@ -97,12 +115,30 @@ void PLH::ZydisDisassembler::setDisplacementFields(PLH::Instruction& inst, const
             break;
         case ZYDIS_OPERAND_TYPE_MEMORY:
 			// Relative to RIP/EIP
-			if(zydisInst->attributes & ZYDIS_ATTRIB_IS_RELATIVE)
+		
+		{
+			bool set = false;
+			if (zydisInst->attributes & ZYDIS_ATTRIB_IS_RELATIVE)
 			{
 				inst.setDisplacementOffset(zydisInst->raw.disp.offset);
 				inst.setRelativeDisplacement(operand->mem.disp.value);
-				return;
+				set = true;
 			}
+
+			if ((zydisInst->mnemonic == ZydisMnemonic::ZYDIS_MNEMONIC_JMP && inst.size() >= 2 && inst.getBytes().at(0) == 0xff && inst.getBytes().at(1) == 0x25) ||
+				(zydisInst->mnemonic == ZydisMnemonic::ZYDIS_MNEMONIC_CALL && inst.size() >= 2 && inst.getBytes().at(0) == 0xff && inst.getBytes().at(1) == 0x15) ||
+				(zydisInst->mnemonic == ZydisMnemonic::ZYDIS_MNEMONIC_CALL && inst.size() >= 3 && inst.getBytes().at(1) == 0xff && inst.getBytes().at(2) == 0x15) ||
+				(zydisInst->mnemonic == ZydisMnemonic::ZYDIS_MNEMONIC_JMP && inst.size() >= 3 && inst.getBytes().at(1) == 0xff && inst.getBytes().at(2) == 0x15)
+				) {
+
+				if (!set) {
+					// displacement is absolute on x86 mode
+					inst.setDisplacementOffset(zydisInst->raw.disp.offset);
+					inst.setAbsoluteDisplacement(zydisInst->raw.disp.value);
+				}
+				inst.setIndirect(true);
+			}
+		}
             break;
         case ZYDIS_OPERAND_TYPE_POINTER:
 			

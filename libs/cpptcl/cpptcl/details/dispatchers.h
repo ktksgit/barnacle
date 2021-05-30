@@ -14,12 +14,44 @@
 // capture its return value
 // further dispatch<void> specialization ignores the res
 
-template <typename R> struct dispatch {
-	template <class Functor,class ... Args> static void do_dispatch2(Tcl_Interp *interp, Functor f) {
-		R res = f();
-		set_result(interp, res);
-	}
+namespace nextgen
+{
+	// Template recursion
+template <size_t i, typename Traits, typename... Args>
+struct Dispatcher {
+    template <typename FuncPtr>
+    static void dispatch(Tcl_Interp *interp, Tcl_Obj *const objv[], FuncPtr func_ptr, Args... args) {
+        constexpr size_t idx = i - 1;
+        using ArgType = typename Traits::template argument<idx>::type;
 
+        details::tcl_cast_by_reference<ArgType> is_by_ref;
+        // first element in objv[0] is procedure name
+        ArgType casted = details::tcl_cast<ArgType>::from(interp, objv[idx+1], is_by_ref.value);
+
+        Dispatcher<idx, Traits, ArgType, Args...>::dispatch(interp, objv, func_ptr, casted, args...);
+    }
+};
+
+// Terminating template specialisation
+template <typename Traits, typename... Args>
+struct Dispatcher<0, Traits, Args...> {
+    template <typename FuncPtr>
+    static void dispatch(Tcl_Interp *interp, Tcl_Obj *const objv[], FuncPtr func_ptr, Args... args) {
+        constexpr size_t idx = 0;
+        using ArgType = typename Traits::template argument<idx>::type;
+
+        details::tcl_cast_by_reference<ArgType> is_by_ref;
+        ArgType casted = details::tcl_cast<ArgType>::from(interp, objv[idx+1], is_by_ref.value);
+
+        using Result = typename Traits::return_type;
+        Result res = func_ptr(args...);
+        set_result(interp, res);
+    }
+};
+
+}
+
+template <typename R> struct dispatch {
 	template <class Functor> static void do_dispatch(Tcl_Interp *interp, Functor f) {
 		R res = f();
 		set_result(interp, res);

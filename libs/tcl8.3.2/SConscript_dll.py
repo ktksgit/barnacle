@@ -4,8 +4,14 @@ Import('*')
 
 from os.path import join
 
-baselibs   = [] # ['kernel32', 'advapi32', 'user32']
-winlibs    = baselibs + [] # ['gdi32', 'comdlg32', 'winspool']
+env_export = env.Clone()
+
+if env["is_mingw"]:
+    baselibs   = [] # ['kernel32', 'advapi32', 'user32']
+    winlibs    = baselibs + [] # ['gdi32', 'comdlg32', 'winspool']
+else:
+    baselibs   = ['advapi32', 'user32'] # ['kernel32', ]
+    winlibs    = baselibs + [] # ['gdi32', 'comdlg32', 'winspool']
 
 guilibs    = winlibs
 conlibs    = baselibs
@@ -28,7 +34,6 @@ tclReg_dll = env.SharedLibrary(target=TCLREGDLLNAME,
 )
 env.Install(BIN_INSTALL_DIR, [tclPipe_dll, tclDDE_dll, tclReg_dll])
 '''
-env_export = env.Clone()
 env_export.AppendUnique(CPPPATH = TCL_INCLUDES,
                         CPPDEFINES = ['BUILD_tcl'] + TCL_DEFINES
 )

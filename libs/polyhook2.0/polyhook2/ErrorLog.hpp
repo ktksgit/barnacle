@@ -4,63 +4,48 @@
 #include <vector>
 #include <string>
 #include <iostream>
+#include <memory>
 #include "polyhook2/Enums.hpp"
 
 namespace PLH {
+
+// abstract base class for logging, clients should subclass this to intercept log messages
+class Logger
+{
+public:
+	virtual void log(std::string msg, ErrorLevel level) = 0;
+	virtual ~Logger() {};
+};
+
+// class for registering client loggers
+class Log
+{
+private:
+	static std::shared_ptr<Logger> m_logger;
+public:
+	static void registerLogger(std::shared_ptr<Logger> logger);
+	static void log(std::string msg, ErrorLevel level);
+};
+
+// simple logger implementation
 
 struct Error {
 	std::string msg;
 	ErrorLevel lvl;
 };
 
-class ErrorLog {
+class ErrorLog : public Logger {
 public:
-	void setLogLevel(ErrorLevel level) {
-		m_logLevel = level;
-	}
-	
-	void push(std::string msg, ErrorLevel level) {
-			push({ std::move(msg), level });
-	}
-
-	void push(Error err) {
-		if (err.lvl >= m_logLevel) { 
-			switch (err.lvl) {
-			case ErrorLevel::INFO:
-				std::cout << "[+] Info: " << err.msg << std::endl;
-				break;
-			case ErrorLevel::WARN:
-				std::cout << "[!] Warn: " << err.msg << std::endl;
-				break;
-			case ErrorLevel::SEV:
-				std::cout << "[!] Error: " << err.msg << std::endl;
-				break;
-			default:
-				std::cout << "Unsupported error message logged " << err.msg << std::endl;
-			}
-		}
-		
-		m_log.push_back(std::move(err));
-	}
-
-	Error pop() {
-		Error err{};
-		if (!m_log.empty()) {
-			err = std::move(m_log.back());
-			m_log.pop_back();
-		}
-		return err;
-	}
-
-	static ErrorLog& singleton() {
-		static ErrorLog log;
-		return log;
-	}
+	void setLogLevel(ErrorLevel level);
+	void log(std::string msg, ErrorLevel level);
+	void push(std::string msg, ErrorLevel level);
+	void push(Error err);
+	Error pop();
+	static ErrorLog& singleton();
 private:
 	std::vector<Error> m_log;
 	ErrorLevel m_logLevel = ErrorLevel::INFO;
 };
-
 
 }
 

@@ -330,3 +330,9 @@ ASALocalRun/
 .mfractor/
 build32/
 build64/
+
+CMakeCache.txt
+cmake-*
+_build/
+_install/
+out/
